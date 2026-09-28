@@ -62,10 +62,10 @@ async function main() {
     summary = '（dry-run 模拟输出）Karpathy 的 LLM Wiki 模式：LLM 维护、人策展、log 可回滚。'
     console.log('[spike] 2/4 跳过 LLM 调用（dry-run）')
   } else {
-    const missing = ['LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL'].filter((k) => !process.env[k])
+    const missing = ['LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL_INGEST', 'LLM_MODEL_QUERY'].filter((k) => !process.env[k])
     if (missing.length > 0) {
       console.error(
-        `[spike] 缺少环境变量：${missing.join(', ')}。请复制 .env.example 为 .env 填写后运行 npm run spike:pi（或通过 --env-file 加载）`,
+        `[spike] 缺少环境变量：${missing.join(', ')}。请复制 .env.example 为 .env 填写后运行 npm run spike:pi`,
       )
       process.exit(1)
     }
@@ -74,21 +74,31 @@ async function main() {
       ingest: {
         baseUrl: process.env.LLM_BASE_URL!,
         apiKey: process.env.LLM_API_KEY!,
-        model: process.env.LLM_MODEL!,
+        model: process.env.LLM_MODEL_INGEST!,
+        label: 'ingest 便宜模型',
       },
       query: {
         baseUrl: process.env.LLM_BASE_URL!,
         apiKey: process.env.LLM_API_KEY!,
-        model: process.env.LLM_MODEL!,
+        model: process.env.LLM_MODEL_QUERY!,
+        label: 'query 强模型',
       },
     })
-    const { text } = await collectText(
+    const { text, events } = await collectText(
       routing.stream('ingest', '你是一个知识库摘要助手。用不超过两句话总结给定材料，不要编造。', [
         { role: 'user', text: files.map((f) => f.text).join('\n\n---\n\n') },
       ]),
     )
     summary = text.trim()
-    console.log(`[spike] 2/4 LLM 调用成功：${summary.slice(0, 60)}…`)
+    // 从 done 事件提取真实 usage（回填 frontmatter tokens 字段）
+    const doneEv = events.find((e) => e.type === 'done') as { partial?: { usage?: { input?: number; output?: number } } } | undefined
+    if (doneEv?.partial?.usage) {
+      tokensUsed = {
+        analysis: doneEv.partial.usage.input ?? 0,
+        generation: doneEv.partial.usage.output ?? 0,
+      }
+    }
+    console.log(`[spike] 2/4 LLM 调用成功（tokens in=${tokensUsed.analysis} out=${tokensUsed.generation}）：${summary.slice(0, 60)}…`)
   }
 
   // 3. 组装 wiki 页并过 @ke/core 校验链
