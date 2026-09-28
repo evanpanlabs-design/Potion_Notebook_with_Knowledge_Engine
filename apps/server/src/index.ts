@@ -11,6 +11,7 @@ import { createRouting, collectText } from '@ke/agent-tools'
 import { ingestSource, gitCommitAll } from './ingest-pipeline.ts'
 import { answerQuery, buildGraphData } from './query-pipeline.ts'
 import { resolveLlmConfig, saveLlmConfig, maskApiKey, mergeApiKey, type LlmConfigFile, type LlmRoleConfig } from './llm-config.ts'
+import { syncPage, runReworkBatch, getReworkState } from './maintain-pipeline.ts'
 
 /**
  * server 入口（D2-4e）。本地单用户，绑 127.0.0.1，无鉴权。
@@ -239,16 +240,36 @@ app.post('/api/v1/query', async (req, reply) => {
 /** 图谱数据（F7 前端直接消费） */
 app.get('/api/v1/graph', async () => buildGraphData(KB_ROOT))
 
-/** 笔记列表（F4）：notes/ 由人所有，只读元信息（标题+路径+更新时间） */
+/** 笔记列表（v0.2）：含项目分层、ingest 同步状态、归档标记。
+ *  同步状态：ingested_sha256 与当前内容 hash 比对 → dirty（有改动未消化）/ never（从未消化） */
 app.get('/api/v1/notes', async () => {
   const snap = await scanKb(KB_ROOT)
-  const out: Array<{ path: string; title: string; updatedAt: string }> = []
+  const { createHash } = await import('node:crypto')
+  const out: Array<{
+    path: string
+    title: string
+    updatedAt: string
+    project: string
+    archived: boolean
+    lastIngestedAt: string | null
+    syncState: 'synced' | 'dirty' | 'never'
+  }> = []
   for (const rel of [...snap.notes].sort()) {
-    const { fm } = parsePage(await readFile(path.join(KB_ROOT, rel), 'utf8'))
+    const text = await readFile(path.join(KB_ROOT, rel), 'utf8')
+    const { fm } = parsePage(text)
+    const relNoPrefix = rel.replace(/^notes\//, '')
+    const dir = relNoPrefix.includes('/') ? (relNoPrefix.split('/')[0] ?? '') : ''
+    const ingestedSha = (fm['ingested_sha256'] as string) ?? null
+    // 与 syncNote 写入对齐：hash 对正文 body 取（不含 frontmatter），fm 变化不算 dirty
+    const curSha = ingestedSha ? createHash('sha256').update(parsePage(text).body.trim()).digest('hex') : null
     out.push({
       path: rel,
-      title: (fm['title'] as string) ?? rel.replace(/^notes\//, '').replace(/\.md$/, ''),
+      title: (fm['title'] as string) ?? (relNoPrefix.replace(/\.md$/, '').split('/').pop() ?? rel),
       updatedAt: (fm['updated_at'] as string) ?? '',
+      project: dir,
+      archived: fm['archived'] === true,
+      lastIngestedAt: (fm['last_ingested_at'] as string) ?? null,
+      syncState: !ingestedSha ? 'never' : curSha === ingestedSha ? 'synced' : 'dirty',
     })
   }
   return { notes: out }
@@ -257,15 +278,20 @@ app.get('/api/v1/notes', async () => {
 /** 笔记读写（F4 server 侧）：notes/ 由人所有，不走闸门（用户直接写）。
  * 保存时补 frontmatter（type: note）+ log 追加 + git 提交（架构规范：`note: <标题>`） */
 app.post('/api/v1/notes', async (req, reply) => {
-  const body = req.body as { filename?: string; content?: string; title?: string }
+  const body = req.body as { filename?: string; content?: string; title?: string; project?: string }
   if (!body?.filename || typeof body.content !== 'string') {
     return reply.code(400).send({ error: '需要 filename 与 content' })
   }
   if (!/^[\w\u4e00-\u9fff.-]+\.md$/.test(body.filename)) {
     return reply.code(400).send({ error: 'filename 仅允许 .md' })
   }
-  await mkdir(path.join(KB_ROOT, 'notes'), { recursive: true })
-  const rel = `notes/${body.filename}`
+  // 项目分层（v0.2）：project 非空 → notes/<project>/<name>.md，仅允许一层目录
+  const project = (body.project ?? '').trim().replace(/^\/|\/$/g, '')
+  if (project && !/^[\w\u4e00-\u9fff-]{1,40}$/.test(project)) {
+    return reply.code(400).send({ error: 'project 仅允许中英文/数字/连字符，≤40 字符，不允许嵌套' })
+  }
+  await mkdir(path.join(KB_ROOT, 'notes', project), { recursive: true })
+  const rel = project ? `notes/${project}/${body.filename}` : `notes/${body.filename}`
   const abs = path.join(KB_ROOT, rel)
   // 已有页保留原 frontmatter（人可自由编辑），新页补 type: note 元信息
   let fm: Record<string, unknown> = { type: 'note', title: body.title ?? body.filename.replace(/\.md$/, ''), created_at: new Date().toISOString() }
@@ -285,6 +311,138 @@ app.post('/api/v1/notes', async (req, reply) => {
   return { ok: true, path: rel, commitSha }
 })
 
+// ---------- v0.2 · 文档工作台 / 同步 / 返修池 / 子图 ----------
+
+/** 笔记归档/取消归档：fm.archived 标记（local-first，不移动文件） */
+app.post('/api/v1/notes/archive', async (req, reply) => {
+  const body = req.body as { path?: string; archived?: boolean }
+  const rel = body?.path ?? ''
+  if (!rel.startsWith('notes/') || !rel.endsWith('.md') || rel.includes('..')) {
+    return reply.code(400).send({ error: 'path 必须是 notes/ 下的 .md 文件' })
+  }
+  const abs = path.join(KB_ROOT, rel)
+  let text: string
+  try {
+    text = await readFile(abs, 'utf8')
+  } catch {
+    return reply.code(404).send({ error: '笔记不存在' })
+  }
+  const { fm, body: pageBody } = parsePage(text)
+  if (body.archived === false) delete fm['archived']
+  else fm['archived'] = true
+  fm['updated_at'] = new Date().toISOString()
+  await writeFile(abs, serializePage(fm, pageBody), 'utf8')
+  const commitSha = await gitCommitAll(KB_ROOT, `note: ${body.archived === false ? 'unarchive' : 'archive'} ${rel}`)
+  return { ok: true, path: rel, archived: fm['archived'] === true, commitSha }
+})
+
+/** 笔记删除：物理 unlink + git 留痕（可从 git 历史恢复） */
+app.delete('/api/v1/notes', async (req, reply) => {
+  const rel = (req.query as { path?: string }).path ?? ''
+  if (!rel.startsWith('notes/') || !rel.endsWith('.md') || rel.includes('..')) {
+    return reply.code(400).send({ error: 'path 必须是 notes/ 下的 .md 文件' })
+  }
+  const abs = path.join(KB_ROOT, rel)
+  try {
+    await unlink(abs)
+  } catch {
+    return reply.code(404).send({ error: '笔记不存在' })
+  }
+  const title = rel.split('/').pop()?.replace(/\.md$/, '') ?? rel
+  await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('note', `删除 ${title}`), 'utf8')
+  const commitSha = await gitCommitAll(KB_ROOT, `note: delete ${rel}`)
+  return { ok: true, path: rel, commitSha }
+})
+
+/** 全库文件树（文档工作台左栏）：wiki 页 + sources + index/log，按目录分组返回扁平列表 */
+app.get('/api/v1/files', async () => {
+  const snap = await scanKb(KB_ROOT)
+  const extraRoot = ['index.md', 'log.md', 'AGENTS.md']
+  const entries: Array<{ path: string; kind: string; reviewed?: boolean }> = []
+  for (const p of snap.pages) entries.push({ path: p, kind: p.startsWith('wiki/entities/') ? 'entity' : p.startsWith('wiki/concepts/') ? 'concept' : p.startsWith('wiki/sources/') ? 'source' : p.startsWith('wiki/queries/') ? 'query' : 'wiki', reviewed: snap.reviewedPages.has(p) })
+  for (const s of snap.sources) entries.push({ path: s, kind: 'raw-source' })
+  for (const e of extraRoot) {
+    try {
+      await access(path.join(KB_ROOT, e))
+      entries.push({ path: e, kind: 'meta' })
+    } catch { /* 不存在跳过 */ }
+  }
+  return { files: entries.sort((a, b) => a.path.localeCompare(b.path)) }
+})
+
+/** 页面编辑（v0.2 第 1 条）：wiki/ 与 sources/ 下任意 md 可改。
+ *  notes/ 走 POST /notes（人写通道）。编辑后记录 fm.prev_sha256（编辑前整页 hash），
+ *  供「同步到知识库」感知 diff；log op=edit + git 提交。 */
+app.put('/api/v1/pages/*', async (req, reply) => {
+  const rel = (req.params as { '*': string })['*']
+  if (!rel.endsWith('.md') || rel.includes('..')) {
+    return reply.code(400).send({ error: '只允许编辑 .md 页面' })
+  }
+  if (!rel.startsWith('wiki/') && !rel.startsWith('sources/')) {
+    return reply.code(400).send({ error: '仅允许编辑 wiki/ 与 sources/ 下的页面（笔记走笔记通道）' })
+  }
+  const body = req.body as { content?: string }
+  if (typeof body?.content !== 'string') return reply.code(400).send({ error: '需要 content' })
+  const abs = path.join(KB_ROOT, rel)
+  let prevText: string | null = null
+  try {
+    prevText = await readFile(abs, 'utf8')
+  } catch {
+    return reply.code(404).send({ error: '页面不存在' })
+  }
+  const { fm: prevFm, body: prevBody } = parsePage(prevText)
+  const { fm: nextFm, body: nextBody } = parsePage(body.content)
+  // 编辑保留原 frontmatter（溯源链不因编辑丢失），只更新 updated_at + prev_sha256
+  const { createHash } = await import('node:crypto')
+  const mergedFm = { ...prevFm, ...nextFm }
+  mergedFm['updated_at'] = new Date().toISOString()
+  mergedFm['prev_sha256'] = createHash('sha256').update(prevText).digest('hex')
+  delete mergedFm['prev_sha256_none']
+  await writeFile(abs, serializePage(mergedFm, `\n${nextBody.trim()}\n`), 'utf8')
+  const title = rel.split('/').pop()?.replace(/\.md$/, '') ?? rel
+  await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('edit', `编辑 ${title}`), 'utf8')
+  const commitSha = await gitCommitAll(KB_ROOT, `edit: ${rel}`)
+  return { ok: true, path: rel, commitSha, prevSha256: mergedFm['prev_sha256'] }
+})
+
+/** 同步到知识库（v0.2 第 1/2 条统一入口）：
+ *  notes/* → 快照 + 两段式 ingest + 回写元数据；sources/* → 重新 ingest（幂等）；
+ *  wiki/* → LLM 局部维护（diff + 邻居页联动更新）。全程经 SSE 可见。 */
+app.post('/api/v1/sync', async (req, reply) => {
+  const body = req.body as { path?: string }
+  const rel = body?.path ?? ''
+  if (!rel.endsWith('.md') || rel.includes('..')) {
+    return reply.code(400).send({ error: '需要 path（notes/ sources/ 或 wiki/ 下的 .md）' })
+  }
+  try {
+    const routing = await llmRouting()
+    const outcome = await syncPage({ kbRoot: KB_ROOT, routing, events: bus }, rel)
+    return outcome
+  } catch (e) {
+    req.log.error(e)
+    return reply.code(500).send({ error: String((e as Error).message ?? e) })
+  }
+})
+
+/** 问答局部子图（v0.2 第 5 条）：种子页 + 一跳邻居 + 相关连线 */
+app.get('/api/v1/graph/sub', async (req, reply) => {
+  const seedsRaw = (req.query as { seeds?: string }).seeds ?? ''
+  const seeds = seedsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+  if (seeds.length === 0) return reply.code(400).send({ error: '需要 seeds（逗号分隔的页面路径）' })
+  const full = await buildGraphData(KB_ROOT)
+  const seedSet = new Set(seeds)
+  const keep = new Set<string>(seeds)
+  for (const e of full.edges) {
+    if (seedSet.has(e.source)) keep.add(e.target)
+    if (seedSet.has(e.target)) keep.add(e.source)
+  }
+  return {
+    nodes: full.nodes.filter((n) => keep.has(n.id)),
+    edges: full.edges.filter((e) => keep.has(e.source) && keep.has(e.target)),
+    seeds,
+  }
+})
+
 /** 库状态快照（前端建库后首页用） */
 app.get('/api/v1/kb/status', async () => {
   const snap = await scanKb(KB_ROOT)
@@ -300,32 +458,44 @@ app.get('/api/v1/kb/status', async () => {
 /** wiki 页清单（含 reviewed 状态），供队列筛选 */
 async function listWikiPages() {
   const snap = await scanKb(KB_ROOT)
-  const out: Array<{ path: string; title: string; type: string; updatedAt: string; reviewed: boolean }> = []
+  const out: Array<{
+    path: string
+    title: string
+    type: string
+    updatedAt: string
+    reviewed: boolean
+    rework?: { note: string; at: string; status: string }
+  }> = []
   for (const rel of [...snap.pages].sort()) {
     const { fm } = parsePage(await readFile(path.join(KB_ROOT, rel), 'utf8'))
+    const rework = fm['rework'] as { note: string; at: string; status: string } | undefined
     out.push({
       path: rel,
       title: (fm['title'] as string) ?? rel,
       type: (fm['type'] as string) ?? 'page',
       updatedAt: (fm['updated_at'] as string) ?? (fm['ingested_at'] as string) ?? '',
       reviewed: fm['reviewed'] === true,
+      rework,
     })
   }
   return out
 }
 
-/** 审核队列：reviewed !== true 的 AI 生成页（wiki/ 全部机生，notes/ 不在内） */
+/** 审核队列：reviewed !== true 的 AI 生成页（wiki/ 全部机生，notes/ 不在内）。
+ *  v0.2：queue 内含 rework 字段；另回传 maintenanceRunning 供前端暂停进池提示。 */
 app.get('/api/v1/review-queue', async () => {
   const all = await listWikiPages()
   return {
     queue: all.filter((p) => !p.reviewed),
     reviewedCount: all.length - all.filter((p) => !p.reviewed).length,
+    maintenanceRunning: getReworkState().running,
   }
 })
 
 interface ReviewBody {
   path: string // wiki/xxx/yyy.md
-  action: 'approve' | 'reject'
+  action: 'approve' | 'reject' | 'rework'
+  note?: string // rework 时的修改意见
 }
 
 app.post('/api/v1/review', async (req, reply) => {
@@ -364,7 +534,71 @@ app.post('/api/v1/review', async (req, reply) => {
     bus.emit('review:done', rel)
     return { ok: true, action: 'reject', path: rel, commitSha }
   }
-  return reply.code(400).send({ error: 'action 仅允许 approve/reject' })
+  if (body.action === 'rework') {
+    // 返修：不删除页面、不改 reviewed；fm.rework 记录意见进入返修池。
+    // 批量修复运行期间（reworkState.running）新返修不进池（status=deferred，等维护结束再处理）。
+    const note = (body.note ?? '').trim()
+    if (!note) return reply.code(400).send({ error: 'rework 需要修改意见 note' })
+    let text: string
+    try {
+      text = await readFile(abs, 'utf8')
+    } catch {
+      return reply.code(404).send({ error: `页面不存在：${rel}` })
+    }
+    const { fm, body: pageBody } = parsePage(text)
+    const maintenance = getReworkState().running
+    fm['rework'] = { note, at: new Date().toISOString(), status: maintenance ? 'deferred' : 'pending' }
+    fm['updated_at'] = new Date().toISOString()
+    await writeFile(abs, serializePage(fm, pageBody), 'utf8')
+    await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('review', `返修意见 ${title}`), 'utf8')
+    const commitSha = await gitCommitAll(KB_ROOT, `review: rework ${rel}`)
+    bus.emit('review:done', rel)
+    return {
+      ok: true,
+      action: 'rework',
+      path: rel,
+      commitSha,
+      queued: !maintenance,
+      message: maintenance ? '批量修复进行中，本条已记录但暂不进返修池，维护结束后可重新提交' : '已进入返修池',
+    }
+  }
+  return reply.code(400).send({ error: 'action 仅允许 approve/reject/rework' })
+})
+
+/** 审核队列（v0.2）：附带返修信息，前端分「待审 / 返修池」两组 */
+app.get('/api/v1/review/rework-status', async () => ({ ...getReworkState() }))
+
+interface ReworkRunBody {
+  items?: Array<{ path: string; note?: string }> // 缺省 = 池中全部 pending
+}
+
+app.post('/api/v1/review/rework-run', async (req, reply) => {
+  const body = req.body as ReworkRunBody
+  const all = await listWikiPages()
+  const pool = body?.items?.length
+    ? body.items
+    : all
+        .filter((p) => !p.reviewed && (p as unknown as { rework?: { status?: string } }).rework?.status === 'pending')
+        .map((p) => ({ path: p.path, note: '' }))
+  // note 需要从页面 fm 里取（列表项没有 rework 全文时）
+  const items: Array<{ path: string; note: string }> = []
+  for (const it of pool) {
+    let note = it.note ?? ''
+    if (!note) {
+      try {
+        const { fm } = parsePage(await readFile(path.join(KB_ROOT, it.path), 'utf8'))
+        note = ((fm['rework'] as { note?: string } | undefined)?.note ?? '').trim()
+      } catch { /* 页面已删则跳过 */ }
+    }
+    if (note) items.push({ path: it.path, note })
+  }
+  if (items.length === 0) return reply.code(400).send({ error: '返修池为空（或全部缺修改意见）' })
+  if (getReworkState().running) return reply.code(409).send({ error: '已有批量修复在运行中' })
+  // 异步执行：立即返回，前端轮询 rework-status；结束 emit review:done
+  void runReworkBatch({ kbRoot: KB_ROOT, routing: await llmRouting(), events: bus }, items)
+    .then(() => bus.emit('review:done', 'rework-batch'))
+    .catch(() => {})
+  return { ok: true, started: items.length, items: items.map((i) => i.path) }
 })
 
 /** 操作流水（log.md）解析为结构化时间线，新在前 */

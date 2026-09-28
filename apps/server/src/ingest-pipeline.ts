@@ -74,7 +74,11 @@ const GENERATE_PROMPT = `你是知识库的"写作器"。基于给定的分析�
 2. 引用规则（严格）：主张出处用行内标注 [[页面名]]，页面名用其他实体/概念的 title 原样（如 [[Karpathy]]、[[知识复利]]）；不要用 [[sources/...]] 路径形式；信息确实无对应页面可链时，用普通文本标注 (来源: 来源名) 即可
 3. sources：本页用到的来源引用（形如 sources/xxx.md，与 frontmatter 对应）
 4. 不要编造分析结果之外的事实
-5. 输出 JSON：{"pages":[{"name":"...","body":"...","sources":["..."]}]}，pages 顺序与输入条目一致`
+5. body 结构化模板（用小节标题组织，参考开源 wiki 条目风格）：
+   - 实体页（人/组织/产品/项目）：## 概述 → ## 关键事实（列 2-4 条带依据的要点）→ ## 关系网络（与其他实体/概念的关联，每条带 [[链接]]）→ ## 来源
+   - 概念页（理论/方法/机制）：## 定义 → ## 机制（它如何运作，因果链）→ ## 相关概念（对比/关联，每条带 [[链接]]）→ ## 常见误区（如有依据；没有就省略该节）
+   - 小节内容不足 1-2 句时省略该小节，不要写空壳；小节顺序固定，语言精炼
+6. 输出 JSON：{"pages":[{"name":"...","body":"...","sources":["..."]}]}，pages 顺序与输入条目一致`
 
 // ---------- 管道 ----------
 
@@ -270,13 +274,14 @@ interface LlmCallResult<T> {
 
 /** 流式调用选项：maxRepair 自动修复轮数；events/phase 用于把 LLM 增量转发到事件总线
  *  （llm:start / llm:delta / llm:done），供 SSE 层把“引擎正在逐字生成”显化到前端。 */
-interface StreamOpts {
+export interface StreamOpts {
   maxRepair?: number
   events?: EventEmitter
   phase?: 'analyze' | 'generate'
 }
 
-async function callLlmJson<T>(
+/** JSON 模式 LLM 调用（带 schema 回喂修复循环）。供 ingest 管线与 maintain/rework 管线共用 */
+export async function callLlmJson<T>(
   routing: IngestDeps['routing'],
   kind: 'ingest' | 'query',
   systemPrompt: string,
