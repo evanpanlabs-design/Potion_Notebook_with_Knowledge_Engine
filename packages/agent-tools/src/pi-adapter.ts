@@ -121,20 +121,25 @@ export function createRouting(config: RoutingConfig) {
   }
 }
 
-/** 从事件流中收集纯文本（spike 与 ingest Phase1/2 的辅助函数） */
-export async function collectText(stream: AssistantMessageEventStream): Promise<{ text: string; events: AssistantMessageEvent[] }> {
+/** 从事件流中收集纯文本与 usage（spike 与 ingest Phase1/2 的辅助函数） */
+export async function collectText(stream: AssistantMessageEventStream): Promise<{ text: string; usage: { input: number; output: number } | null; events: AssistantMessageEvent[] }> {
   const chunks: string[] = []
   const events: AssistantMessageEvent[] = []
+  let usage: { input: number; output: number } | null = null
   for await (const ev of stream) {
     events.push(ev)
-    if (ev.type === 'text_delta' && 'text' in ev) {
-      chunks.push((ev as { text: string }).text)
+    if (ev.type === 'text_delta') {
+      chunks.push(ev.delta)
+    }
+    if (ev.type === 'done') {
+      // done 事件载荷在 message 字段（AssistantMessage，含 usage）
+      const u = ev.message?.usage
+      if (u) usage = { input: u.input ?? 0, output: u.output ?? 0 }
     }
   }
-  const done = events.find((e) => e.type === 'done')
-  if (!done) {
+  if (!events.some((e) => e.type === 'done')) {
     const err = events.find((e) => e.type === 'error')
     throw new Error(`pi 适配层：流未正常结束（${err ? JSON.stringify(err) : '无 done 事件'}）`)
   }
-  return { text: chunks.join(''), events }
+  return { text: chunks.join(''), usage, events }
 }

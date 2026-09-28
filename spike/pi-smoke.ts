@@ -84,19 +84,15 @@ async function main() {
         label: 'query 强模型',
       },
     })
-    const { text, events } = await collectText(
+    const { text, usage } = await collectText(
       routing.stream('ingest', '你是一个知识库摘要助手。用不超过两句话总结给定材料，不要编造。', [
         { role: 'user', text: files.map((f) => f.text).join('\n\n---\n\n') },
       ]),
     )
-    summary = text.trim()
-    // 从 done 事件提取真实 usage（回填 frontmatter tokens 字段）
-    const doneEv = events.find((e) => e.type === 'done') as { partial?: { usage?: { input?: number; output?: number } } } | undefined
-    if (doneEv?.partial?.usage) {
-      tokensUsed = {
-        analysis: doneEv.partial.usage.input ?? 0,
-        generation: doneEv.partial.usage.output ?? 0,
-      }
+    // glm-53-meituan 是推理模型，输出可能带 <summation>...</summation> 包裹，剥离之
+    summary = text.replace(/^\s*<summation>[\s\S]*?<\/summation>\s*/, '').trim() || text.trim()
+    if (usage) {
+      tokensUsed = { analysis: usage.input, generation: usage.output }
     }
     console.log(`[spike] 2/4 LLM 调用成功（tokens in=${tokensUsed.analysis} out=${tokensUsed.generation}）：${summary.slice(0, 60)}…`)
   }
