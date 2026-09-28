@@ -59,11 +59,13 @@ const ANALYZE_PROMPT = `你是知识库的"分析器"。阅读给定材料，产
 要求：
 1. summary：一句话概括材料
 2. language：材料语言（zh/en/…）
-3. entities：材料中出现的、值得建"实体页"的核心实体（人/组织/产品/项目），每实体 3-8 条 claims（有依据的具体主张，标注 locus 出处位置）
-4. concepts：值得建"概念页"的核心概念，每概念 2-6 条 claims
-5. 宁缺毋滥：只收录理解材料所必需的条目，总量 entities+concepts 不超过 12 个
+3. source_title：给本来源起一个短标题（≤12 字，名词短语，不用完整句子；如 "Karpathy LLM Wiki 工作流"）
+4. entities：材料中出现的、值得建"实体页"的核心实体（人/组织/产品/项目），每实体 3-8 条 claims（有依据的具体主张，标注 locus 出处位置）
+5. concepts：值得建"概念页"的核心概念，每概念 2-6 条 claims
+6. 命名约束：entities/concepts 的 name 必须是简短名词（中文 ≤10 字 / 英文 ≤3 个词），禁止用完整句子或长描述作 name
+7. 宁缺毋滥：只收录理解材料所必需的条目，总量 entities+concepts 不超过 12 个
 JSON schema：
-{"summary":"...","language":"zh","entities":[{"name":"...","definition":"...","aliases":["..."],"claims":[{"statement":"...","locus":"..."}],"tags":["..."]}],"concepts":[同 entities 结构]}`
+{"summary":"...","language":"zh","source_title":"...","entities":[{"name":"...","definition":"...","aliases":["..."],"claims":[{"statement":"...","locus":"..."}],"tags":["..."]}],"concepts":[同 entities 结构]}`
 
 const GENERATE_PROMPT = `你是知识库的"写作器"。基于给定的分析结果，为每个实体/概念写 wiki 页正文。
 要求：
@@ -76,14 +78,16 @@ const GENERATE_PROMPT = `你是知识库的"写作器"。基于给定的分析�
 // ---------- 管道 ----------
 
 export interface IngestOutcome {
-  /** 本次 ingest 的 wiki 落盘页面路径 */
+  /** 本次 ingest 的 wiki 落盘页面路径（幂等跳过时为空） */
   writtenPages: string[]
   /** 来源摘要页路径 */
   sourceSummaryPage: string
   /** 被闸门拒绝的提案（错误信息） */
   rejections: string[]
-  /** git commit sha（无 git 时为 null） */
+  /** git commit sha（无 git 时为 null；幂等跳过时为 null） */
   commitSha: string | null
+  /** 幂等命中：同 sha256 的 source 已 ingest 过，本次未做任何事 */
+  skipped: boolean
   analysisTokens: { input: number; output: number }
   generationTokens: { input: number; output: number }
 }
@@ -96,6 +100,26 @@ export async function ingestSource(
   const { kbRoot, routing } = deps
   const events = deps.events ?? new EventEmitter()
   const sourceText = await readFile(path.join(kbRoot, sourceRel), 'utf8')
+  const sourceSlug = slugify(sourceRel.replace(/^sources\//, '').replace(/\.md$/, ''))
+  const summaryPath = `wiki/sources/${sourceSlug}.md`
+
+  // ---------- 幂等判重：同 sha256 的 source 已 ingest 过 → 直接跳过 ----------
+  const sourceHash = await sha256(sourceText)
+  const existingSummary = await readFile(path.join(kbRoot, summaryPath), 'utf8').catch(() => null)
+  const existingHash = existingSummary?.match(/^sha256:\s*([a-f0-9]{64})\s*$/m)?.[1]
+  if (existingHash !== undefined && existingHash === sourceHash) {
+    events.emit('analyze:start', sourceRel)
+    events.emit('commit', 'skipped-idempotent')
+    return {
+      writtenPages: [],
+      sourceSummaryPage: summaryPath,
+      rejections: [],
+      commitSha: null,
+      skipped: true,
+      analysisTokens: { input: 0, output: 0 },
+      generationTokens: { input: 0, output: 0 },
+    }
+  }
 
   // ---------- Phase 1: analyze ----------
   events.emit('analyze:start', sourceRel)
@@ -169,14 +193,18 @@ export async function ingestSource(
     proposals.push(result.sanitized!)
   }
 
-  // 来源摘要页提案（source 摘要页）
-  const sourceSlug = slugify(sourceRel.replace(/^sources\//, '').replace(/\.md$/, ''))
-  const summaryPath = `wiki/sources/${sourceSlug}.md`
+  // 来源摘要页提案（source 摘要页）：title 用短名（LLM 的 source_title 优先，退回文件名），
+  // 完整 summary 放正文，避免超长标题污染页面名/图谱节点/引用 chip
+  const llmSourceTitle = (phase1.report as { source_title?: unknown }).source_title
+  const summaryTitle =
+    typeof llmSourceTitle === 'string' && llmSourceTitle.trim().length > 0 && llmSourceTitle.trim().length <= 24
+      ? llmSourceTitle.trim()
+      : sourceRel.replace(/^sources\//, '').replace(/\.md$/, '')
   const summaryFm = {
     type: 'source',
-    title: phase1.report.summary.slice(0, 80),
+    title: summaryTitle,
     source: sourceRel,
-    sha256: await sha256(sourceText),
+    sha256: sourceHash,
     ingested_at: now,
     tokens: { analysis: phase1.tokens.input + phase1.tokens.output, generation: phase2.tokens.input + phase2.tokens.output },
   }
@@ -217,6 +245,7 @@ export async function ingestSource(
     sourceSummaryPage: summaryPath,
     rejections,
     commitSha,
+    skipped: false,
     analysisTokens: phase1.tokens,
     generationTokens: phase2.tokens,
   }
@@ -252,9 +281,23 @@ async function callLlmJson<T>(
     const { text, usage } = await (async () => {
       const chunks: string[] = []
       let usage: { input: number; output: number } = { input: 0, output: 0 }
-      for await (const ev of routing.stream(kind, systemPrompt, currentMessages)) {
-        if (ev.type === 'text_delta' && ev.delta) chunks.push(ev.delta)
-        if (ev.type === 'done' && ev.message?.usage) usage = { input: ev.message.usage.input ?? 0, output: ev.message.usage.output ?? 0 }
+      // 429/限流退避重试：与 RPM 队列互补（队列管请求发起节奏，这里管被拒后的等待重试）
+      const backoffs = [3000, 8000, 15000]
+      for (let tryN = 0; ; tryN++) {
+        try {
+          chunks.length = 0
+          usage = { input: 0, output: 0 }
+          for await (const ev of routing.stream(kind, systemPrompt, currentMessages)) {
+            if (ev.type === 'text_delta' && ev.delta) chunks.push(ev.delta)
+            if (ev.type === 'done' && ev.message?.usage) usage = { input: ev.message.usage.input ?? 0, output: ev.message.usage.output ?? 0 }
+          }
+          break
+        } catch (err) {
+          const msg = String((err as Error)?.message ?? err)
+          const rateLimited = /429|rate.?limit|too many requests/i.test(msg)
+          if (!rateLimited || tryN >= backoffs.length) throw err
+          await new Promise((r) => setTimeout(r, backoffs[tryN]))
+        }
       }
       return { text: chunks.join(''), usage }
     })()
