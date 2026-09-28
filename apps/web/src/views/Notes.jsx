@@ -1,46 +1,11 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { EditorView, Decoration, ViewPlugin, keymap } from '@codemirror/view'
-import { EditorState, RangeSetBuilder } from '@codemirror/state'
+import { EditorView, keymap } from '@codemirror/view'
+import { EditorState } from '@codemirror/state'
 import { autocompletion } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
+import { livePreview, wikilinkClickHandler } from '../cm-livepreview.js'
 import { api } from '../api.js'
-
-const wikilinkRegex = /\[\[([^\][\n]+)\]\]/g
-
-/** D7 验证过的三件套：view 层高亮（不改文本） + [[ 补全自动闭合 + 纯文本直存 */
-const wikilinkHighlight = ViewPlugin.fromClass(
-  class {
-    constructor(view) {
-      this.decorations = buildDeco(view)
-    }
-    update(u) {
-      if (u.docChanged || u.viewportChanged) this.decorations = buildDeco(u.view)
-    }
-  },
-  { decorations: (v) => v.decorations },
-)
-
-function buildDeco(view) {
-  const b = new RangeSetBuilder()
-  for (const { from, to } of view.visibleRanges) {
-    for (let pos = from; pos <= to; ) {
-      const line = view.state.doc.lineAt(pos)
-      const lineText = line.text
-      let m
-      wikilinkRegex.lastIndex = 0
-      while ((m = wikilinkRegex.exec(lineText))) {
-        b.add(
-          line.from + m.index,
-          line.from + m.index + m[0].length,
-          Decoration.mark({ class: 'cm-wikilink', attributes: { title: `页面：${m[1]}` } }),
-        )
-      }
-      pos = line.to + 1
-    }
-  }
-  return b.finish()
-}
 
 /** [[ 触发页面名补全，apply 自动补 ]] */
 function pageNameCompletions(getPages) {
@@ -140,7 +105,8 @@ export default function Notes({ onOpenPage }) {
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
         markdown(),
-        wikilinkHighlight,
+        livePreview(),
+        wikilinkClickHandler(onOpenPage),
         autocompletion({
           override: [pageNameCompletions(() => {
             const noteTitles = notes.map((n) => ({ title: n.title }))

@@ -26,6 +26,11 @@ export function ensurePageIndex() {
     })
 }
 
+/** 裸标题 → 页面 path（需先 ensurePageIndex） */
+export function resolveTitle(title) {
+  return titleToPath?.get(title) ?? titleToPath?.get(title.replace(/\.md$/, '')) ?? null
+}
+
 function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
 }

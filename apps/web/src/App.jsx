@@ -15,20 +15,35 @@ const NAV = [
   { id: 'graph', icon: '⟡', label: '知识图谱' },
 ]
 
+/** 路径 → 短标题（wiki/concepts/知识复利.md → 知识复利） */
+function pretty(p) {
+  return p.split('/').pop().replace(/\.md$/, '')
+}
+
 /** 页面抽屉：任何入口的 [[链接]]/引用 chip 点击都会打开它 */
 function PageDrawer({ pagePath, onClose }) {
   const [content, setContent] = useState('')
   const [error, setError] = useState('')
+  const [backlinks, setBacklinks] = useState([])
 
   useEffect(() => {
     if (!pagePath) return
     let alive = true
     setContent('')
     setError('')
+    setBacklinks([])
     api
       .page(pagePath)
       .then((r) => alive && setContent(r.content))
       .catch((e) => alive && setError(e.message))
+    // 反向链接：graph edges 中 target === 当前页的 source 列表
+    api
+      .graph()
+      .then((g) => {
+        if (!alive) return
+        setBacklinks(g.edges.filter((e) => e.target === pagePath).map((e) => e.source))
+      })
+      .catch(() => {})
     return () => {
       alive = false
     }
@@ -66,6 +81,20 @@ function PageDrawer({ pagePath, onClose }) {
             </div>
           )}
           {content && <MarkdownHost text={body} onOpenPage={onClose} />}
+          {content && (
+            <div className="backlinks">
+              <h4>反向链接 · 被哪些页面引用</h4>
+              {backlinks.length === 0 ? (
+                <span className="backlink-empty">暂无 —— 在其它页面里用 [[本页标题]] 引用它，这里就会亮起来。</span>
+              ) : (
+                backlinks.map((p) => (
+                  <button key={p} className="backlink-item" onClick={() => onClose(p)}>
+                    ↩ {pretty(p)}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </aside>
     </>

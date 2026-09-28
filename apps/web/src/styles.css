@@ -394,3 +394,29 @@ span.wikilink {
   padding: 1px 6px;
   font-weight: 600;
 }
+
+/* ---------- D9: live-preview 排版 ---------- */
+.editor-host .cm-line.cm-h1 { font-size: 1.375rem; font-weight: 700; font-family: var(--font-display); line-height: 1.5; margin-top: 8px; }
+.editor-host .cm-line.cm-h2 { font-size: 1.1875rem; font-weight: 700; font-family: var(--font-display); line-height: 1.5; }
+.editor-host .cm-line.cm-h3 { font-size: 1.0625rem; font-weight: 600; font-family: var(--font-display); line-height: 1.5; }
+.cm-strong { font-weight: 700; }
+.cm-inline-code { font-family: var(--font-mono); font-size: 0.8125rem; background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--r-sm); padding: 1px 6px; }
+.cm-list-marker { color: var(--c-primary); font-weight: 700; }
+
+/* ---------- D9: 抽屉反向链接 ---------- */
+.backlinks { border-top: 1px solid var(--c-border); margin-top: 24px; padding-top: 16px; }
+.backlinks h4 {
+  font-family: var(--font-mono); font-size: 0.75rem;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--c-text-3); margin: 0 0 8px;
+}
+.backlinks .backlink-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 0 8px 8px 0; padding: 4px 10px;
+  background: var(--c-secondary-soft); color: var(--c-secondary);
+  border-radius: var(--r-sm);
+  font-size: 0.8125rem; font-weight: 600;
+  cursor: pointer; border: none; font-family: inherit;
+}
+.backlinks .backlink-item:hover { background: #ede9fe; }
+.backlinks .backlink-empty { color: var(--c-text-3); font-size: 0.8125rem; }
