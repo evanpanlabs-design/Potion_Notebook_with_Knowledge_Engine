@@ -88,6 +88,8 @@ export interface KbSnapshot {
   pages: Set<string>
   /** sources/ 下全部文件相对路径 */
   sources: Set<string>
+  /** notes/ 下全部笔记相对路径（人所有，不进 wiki 检索，但列表/提升流需要） */
+  notes: Set<string>
   /** reviewed:true 的页面路径 */
   reviewedPages: Set<string>
 }
@@ -125,5 +127,10 @@ export async function scanKb(root: string): Promise<KbSnapshot> {
   await walkMd(root, 'sources', sourceFiles)
   for (const f of sourceFiles) sources.add(f)
 
-  return { pages, sources, reviewedPages }
+  const notes = new Set<string>()
+  const noteFiles: string[] = []
+  await walkMd(root, 'notes', noteFiles)
+  for (const f of noteFiles) notes.add(f)
+
+  return { pages, sources, notes, reviewedPages }
 }

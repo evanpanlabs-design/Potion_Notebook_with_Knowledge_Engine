@@ -1,12 +1,12 @@
 import Fastify from 'fastify'
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import process from 'node:process'
 
-import { initKb, scanKb } from '@ke/core'
+import { initKb, scanKb, parsePage, renderLogEntry, serializePage } from '@ke/core'
 import { createRouting } from '@ke/agent-tools'
-import { ingestSource } from './ingest-pipeline.ts'
+import { ingestSource, gitCommitAll } from './ingest-pipeline.ts'
 import { answerQuery, buildGraphData } from './query-pipeline.ts'
 
 /**
@@ -108,9 +108,25 @@ app.post('/api/v1/query', async (req, reply) => {
 /** 图谱数据（F7 前端直接消费） */
 app.get('/api/v1/graph', async () => buildGraphData(KB_ROOT))
 
-/** 笔记读写（F4 server 侧）：notes/ 由人所有，不走闸门（用户直接写） */
+/** 笔记列表（F4）：notes/ 由人所有，只读元信息（标题+路径+更新时间） */
+app.get('/api/v1/notes', async () => {
+  const snap = await scanKb(KB_ROOT)
+  const out: Array<{ path: string; title: string; updatedAt: string }> = []
+  for (const rel of [...snap.notes].sort()) {
+    const { fm } = parsePage(await readFile(path.join(KB_ROOT, rel), 'utf8'))
+    out.push({
+      path: rel,
+      title: (fm['title'] as string) ?? rel.replace(/^notes\//, '').replace(/\.md$/, ''),
+      updatedAt: (fm['updated_at'] as string) ?? '',
+    })
+  }
+  return { notes: out }
+})
+
+/** 笔记读写（F4 server 侧）：notes/ 由人所有，不走闸门（用户直接写）。
+ * 保存时补 frontmatter（type: note）+ log 追加 + git 提交（架构规范：`note: <标题>`） */
 app.post('/api/v1/notes', async (req, reply) => {
-  const body = req.body as { filename?: string; content?: string }
+  const body = req.body as { filename?: string; content?: string; title?: string }
   if (!body?.filename || typeof body.content !== 'string') {
     return reply.code(400).send({ error: '需要 filename 与 content' })
   }
@@ -118,9 +134,24 @@ app.post('/api/v1/notes', async (req, reply) => {
     return reply.code(400).send({ error: 'filename 仅允许 .md' })
   }
   await mkdir(path.join(KB_ROOT, 'notes'), { recursive: true })
-  await writeFile(path.join(KB_ROOT, 'notes', body.filename), body.content, 'utf8')
-  bus.emit('note:saved', body.filename)
-  return { ok: true, path: `notes/${body.filename}` }
+  const rel = `notes/${body.filename}`
+  const abs = path.join(KB_ROOT, rel)
+  // 已有页保留原 frontmatter（人可自由编辑），新页补 type: note 元信息
+  let fm: Record<string, unknown> = { type: 'note', title: body.title ?? body.filename.replace(/\.md$/, ''), created_at: new Date().toISOString() }
+  try {
+    const prev = await readFile(abs, 'utf8')
+    const parsed = parsePage(prev)
+    if (parsed.fm && Object.keys(parsed.fm).length > 0) fm = { ...parsed.fm, title: body.title ?? parsed.fm['title'] }
+  } catch { /* 新文件 */ }
+  fm['updated_at'] = new Date().toISOString()
+  const { fm: curFm, body: curBody } = parsePage(body.content)
+  const merged = { ...curFm, ...fm }
+  await writeFile(abs, serializePage(merged, `\n${curBody.trim()}\n`), 'utf8')
+  const title = (merged['title'] as string) ?? body.filename
+  await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('note', title.slice(0, 60)), 'utf8')
+  const commitSha = await gitCommitAll(KB_ROOT, `note: ${title}`)
+  bus.emit('note:saved', rel)
+  return { ok: true, path: rel, commitSha }
 })
 
 /** 库状态快照（前端建库后首页用） */

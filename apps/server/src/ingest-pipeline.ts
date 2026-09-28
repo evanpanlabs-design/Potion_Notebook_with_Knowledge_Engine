@@ -289,8 +289,8 @@ function firstSentence(body: string): string {
   return t.slice(0, 80)
 }
 
-/** 库内 git 提交（无 git 仓库时静默返回 null，便于测试目录） */
-async function gitCommitAll(root: string, message: string): Promise<string | null> {
+/** 全库 git 提交（无 .git 时静默返回 null）。gate executor 与笔记保存共用，保持"一次操作=一次提交"规范 */
+export async function gitCommitAll(root: string, message: string): Promise<string | null> {
   const run = (args: string[]) =>
     new Promise<{ code: number; out: string }>((resolve) => {
       const p = spawn('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
