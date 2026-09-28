@@ -19,4 +19,7 @@ export const api = {
   notes: () => j('/api/notes'),
   saveNote: (filename, content, title) => post('/api/notes', { filename, content, title }),
   page: (path) => j(`/api/pages/${path}`),
+  reviewQueue: () => j('/api/review-queue'),
+  review: (path, action) => post('/api/review', { path, action }),
+  log: () => j('/api/log'),
 }

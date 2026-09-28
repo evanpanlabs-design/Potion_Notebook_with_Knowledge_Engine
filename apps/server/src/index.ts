@@ -1,5 +1,5 @@
 import Fastify from 'fastify'
-import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, appendFile, mkdir, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import process from 'node:process'
@@ -162,6 +162,89 @@ app.get('/api/v1/kb/status', async () => {
     sources: snap.sources.size,
     reviewed: snap.reviewedPages.size,
   }
+})
+
+// ---------- D10-11: Review Queue（AI 生成页默认待审，人把关） ----------
+
+/** wiki 页清单（含 reviewed 状态），供队列筛选 */
+async function listWikiPages() {
+  const snap = await scanKb(KB_ROOT)
+  const out: Array<{ path: string; title: string; type: string; updatedAt: string; reviewed: boolean }> = []
+  for (const rel of [...snap.pages].sort()) {
+    const { fm } = parsePage(await readFile(path.join(KB_ROOT, rel), 'utf8'))
+    out.push({
+      path: rel,
+      title: (fm['title'] as string) ?? rel,
+      type: (fm['type'] as string) ?? 'page',
+      updatedAt: (fm['updated_at'] as string) ?? (fm['ingested_at'] as string) ?? '',
+      reviewed: fm['reviewed'] === true,
+    })
+  }
+  return out
+}
+
+/** 审核队列：reviewed !== true 的 AI 生成页（wiki/ 全部机生，notes/ 不在内） */
+app.get('/api/v1/review-queue', async () => {
+  const all = await listWikiPages()
+  return {
+    queue: all.filter((p) => !p.reviewed),
+    reviewedCount: all.length - all.filter((p) => !p.reviewed).length,
+  }
+})
+
+interface ReviewBody {
+  path: string // wiki/xxx/yyy.md
+  action: 'approve' | 'reject'
+}
+
+app.post('/api/v1/review', async (req, reply) => {
+  const body = req.body as ReviewBody
+  const rel = body?.path ?? ''
+  if (!rel.startsWith('wiki/') || !rel.endsWith('.md') || rel.includes('..')) {
+    return reply.code(400).send({ error: 'path 必须是 wiki/ 下的 .md 页面' })
+  }
+  const abs = path.join(KB_ROOT, rel)
+  const title = rel.split('/').pop()?.replace(/\.md$/, '') ?? rel
+  if (body.action === 'approve') {
+    let text: string
+    try {
+      text = await readFile(abs, 'utf8')
+    } catch {
+      return reply.code(404).send({ error: `页面不存在：${rel}` })
+    }
+    const { fm, body: pageBody } = parsePage(text)
+    fm['reviewed'] = true
+    fm['updated_at'] = new Date().toISOString()
+    await writeFile(abs, serializePage(fm, pageBody), 'utf8')
+    await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('review', `通过 ${title}`), 'utf8')
+    const commitSha = await gitCommitAll(KB_ROOT, `review: approve ${rel}`)
+    bus.emit('review:done', rel)
+    return { ok: true, action: 'approve', path: rel, commitSha }
+  }
+  if (body.action === 'reject') {
+    // 驳回 = 删除该 AI 生成页（闸门外的人工纠错），log 留痕可追溯
+    try {
+      await unlink(abs)
+    } catch {
+      return reply.code(404).send({ error: `页面不存在：${rel}` })
+    }
+    await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('review', `驳回并删除 ${title}`), 'utf8')
+    const commitSha = await gitCommitAll(KB_ROOT, `review: reject ${rel}`)
+    bus.emit('review:done', rel)
+    return { ok: true, action: 'reject', path: rel, commitSha }
+  }
+  return reply.code(400).send({ error: 'action 仅允许 approve/reject' })
+})
+
+/** 操作流水（log.md）解析为结构化时间线，新在前 */
+app.get('/api/v1/log', async () => {
+  const text = await readFile(path.join(KB_ROOT, 'log.md'), 'utf8').catch(() => '')
+  const entries: Array<{ ts: string; op: string; title: string }> = []
+  for (const m of text.matchAll(/^## \[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\] (\w+) \| (.+)$/gm)) {
+    const [ts, op, title] = m.slice(1)
+    if (ts && op && title) entries.push({ ts, op, title })
+  }
+  return { entries: entries.reverse().slice(0, 100) }
 })
 
 app.get('/api/v1/pages/*', async (req, reply) => {

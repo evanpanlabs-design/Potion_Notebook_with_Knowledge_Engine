@@ -6,12 +6,14 @@ import Feed from './views/Feed.jsx'
 import Ask from './views/Ask.jsx'
 import Notes from './views/Notes.jsx'
 import Graph from './views/Graph.jsx'
+import Review from './views/Review.jsx'
 
 const NAV = [
   { id: 'overview', icon: '◈', label: '总览' },
   { id: 'feed', icon: '⇪', label: '投喂素材' },
   { id: 'ask', icon: '◎', label: '提问' },
   { id: 'notes', icon: '✎', label: '笔记' },
+  { id: 'review', icon: '☑', label: '审核' },
   { id: 'graph', icon: '⟡', label: '知识图谱' },
 ]
 
@@ -148,6 +150,7 @@ export default function App() {
         {view === 'ask' && <Ask onOpenPage={openPage} />}
         {view === 'notes' && <Notes onOpenPage={openPage} />}
         {view === 'graph' && <Graph onOpenPage={openPage} />}
+        {view === 'review' && <Review />}
       </main>
       <PageDrawer pagePath={pagePath} onClose={closeDrawer} />
     </div>

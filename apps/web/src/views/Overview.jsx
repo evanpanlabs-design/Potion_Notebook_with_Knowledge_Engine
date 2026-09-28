@@ -6,6 +6,7 @@ import MarkdownHost from './MarkdownHost.jsx'
 export default function Overview({ onOpenPage, go }) {
   const [status, setStatus] = useState(null)
   const [indexPage, setIndexPage] = useState(null)
+  const [logEntries, setLogEntries] = useState([])
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -18,6 +19,10 @@ export default function Overview({ onOpenPage, go }) {
       .page('index.md')
       .then((p) => alive && setIndexPage(p.content))
       .catch(() => {} /* 库未初始化时无 index.md，静默 */)
+    api
+      .log()
+      .then((r) => alive && setLogEntries(r.entries.slice(0, 8)))
+      .catch(() => {} /* log.md 不存在时静默 */)
     return () => {
       alive = false
     }
@@ -59,6 +64,21 @@ export default function Overview({ onOpenPage, go }) {
           </button>
           ，引擎会自动把它消化成结构化 wiki 页面。
         </div>
+      )}
+
+      {logEntries.length > 0 && (
+        <section className="card">
+          <h3 className="doc-label">最近动态 · log.md 流水</h3>
+          <div className="timeline">
+            {logEntries.map((e, i) => (
+              <div key={`${e.ts}-${i}`} className="timeline-row">
+                <span className={`op-badge op-${e.op}`}>{e.op}</span>
+                <span className="timeline-title">{e.title}</span>
+                <span className="timeline-ts">{e.ts}</span>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       {indexPage && (
