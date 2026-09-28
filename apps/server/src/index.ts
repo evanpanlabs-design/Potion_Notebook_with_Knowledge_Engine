@@ -7,9 +7,10 @@ import { EventEmitter } from 'node:events'
 import process from 'node:process'
 
 import { initKb, scanKb, parsePage, renderLogEntry, serializePage } from '@ke/core'
-import { createRouting } from '@ke/agent-tools'
+import { createRouting, collectText } from '@ke/agent-tools'
 import { ingestSource, gitCommitAll } from './ingest-pipeline.ts'
 import { answerQuery, buildGraphData } from './query-pipeline.ts'
+import { resolveLlmConfig, saveLlmConfig, maskApiKey, mergeApiKey, type LlmConfigFile, type LlmRoleConfig } from './llm-config.ts'
 
 /**
  * server 入口（D2-4e）。本地单用户，绑 127.0.0.1，无鉴权。
@@ -61,16 +62,111 @@ async function ensureKbGit(root: string): Promise<void> {
   console.log(`knowledge base git repo initialized at ${root}`)
 }
 
-function llmRouting() {
-  const baseUrl = process.env.LLM_BASE_URL
-  const apiKey = process.env.LLM_API_KEY
-  if (!baseUrl || !apiKey) throw new Error('缺少 LLM_BASE_URL/LLM_API_KEY 环境变量')
-  const defaultModel = process.env.LLM_MODEL_INGEST ?? 'gpt-4o-mini'
-  return createRouting({
-    ingest: { baseUrl, apiKey, model: defaultModel },
-    query: { baseUrl, apiKey, model: process.env.LLM_MODEL_QUERY ?? defaultModel },
-  })
+/** LLM 路由：设置页文件配置 > 环境变量；都没有则报错提示去设置页配置 */
+async function llmRouting() {
+  const { config } = await resolveLlmConfig()
+  if (!config) {
+    throw new Error('尚未配置 LLM：请打开「设置」页填写并保存，或设置 LLM_BASE_URL/LLM_API_KEY 环境变量')
+  }
+  return createRouting(config)
 }
+
+app.get('/api/v1/llm-config', async () => {
+  const { config, source } = await resolveLlmConfig()
+  if (!config) return { source, hasConfig: false }
+  const view = (r: LlmRoleConfig) => ({
+    protocol: r.protocol,
+    baseUrl: r.baseUrl,
+    apiKey: maskApiKey(r.apiKey),
+    model: r.model,
+  })
+  return { source, hasConfig: true, ingest: view(config.ingest), query: view(config.query) }
+})
+
+interface LlmConfigBody {
+  ingest: LlmRoleConfig
+  query: LlmRoleConfig
+}
+
+app.post('/api/v1/llm-config', async (req, reply) => {
+  const body = req.body as LlmConfigBody
+  const roles = ['ingest', 'query'] as const
+  for (const role of roles) {
+    const r = body?.[role]
+    if (!r || typeof r.baseUrl !== 'string' || !r.baseUrl.trim() || typeof r.model !== 'string' || !r.model.trim()) {
+      return reply.code(400).send({ error: `${role}：baseUrl 与 model 必填` })
+    }
+    if (r.protocol !== 'openai' && r.protocol !== 'anthropic') {
+      return reply.code(400).send({ error: `${role}：protocol 仅支持 openai / anthropic` })
+    }
+  }
+  const { config: existing } = await resolveLlmConfig()
+  const next: LlmConfigFile = {
+    ingest: {
+      protocol: body.ingest.protocol,
+      baseUrl: body.ingest.baseUrl.trim(),
+      apiKey: mergeApiKey(body.ingest.apiKey, existing?.ingest.apiKey),
+      model: body.ingest.model.trim(),
+    },
+    query: {
+      protocol: body.query.protocol,
+      baseUrl: body.query.baseUrl.trim(),
+      apiKey: mergeApiKey(body.query.apiKey, existing?.query.apiKey),
+      model: body.query.model.trim(),
+    },
+  }
+  for (const role of roles) {
+    if (!next[role].apiKey) return reply.code(400).send({ error: `${role}：apiKey 必填（首次配置）` })
+  }
+  await saveLlmConfig(next)
+  return { ok: true, note: '已保存到 data/llm-config.json，立即生效（无需重启）' }
+})
+
+interface LlmTestBody {
+  role: 'ingest' | 'query'
+  /** 可选：测试未保存的草稿配置；缺省则测试当前生效配置 */
+  config?: LlmRoleConfig
+}
+
+app.post('/api/v1/llm-config/test', async (req, reply) => {
+  const body = req.body as LlmTestBody
+  const role = body?.role
+  if (role !== 'ingest' && role !== 'query') return reply.code(400).send({ error: 'role 必须是 ingest 或 query' })
+  let target: LlmRoleConfig | undefined = body.config
+  if (target && (!target.apiKey || target.apiKey.includes('••'))) {
+    // 草稿里 apiKey 被打码/留空：与已存配置合并后再测
+    const { config } = await resolveLlmConfig()
+    target = config ? { ...target, apiKey: mergeApiKey(target.apiKey, config[role].apiKey) } : target
+  }
+  if (!target) {
+    const { config } = await resolveLlmConfig()
+    target = config?.[role]
+    if (!target) return reply.code(400).send({ error: '当前无已保存配置，请在表单里填写完整后再测' })
+  }
+  if (!target.baseUrl?.trim() || !target.model?.trim() || !target.apiKey?.trim()) {
+    return reply.code(400).send({ error: '测试需要完整配置：baseUrl / apiKey / model' })
+  }
+  const started = Date.now()
+  try {
+    const routing = createRouting({ ingest: target, query: target })
+    const stream = routing.stream(role, undefined, [{ role: 'user', text: '连通性测试：请只回复两个字母 pong' }])
+    const { text, usage } = await collectText(stream)
+    return {
+      ok: true,
+      latencyMs: Date.now() - started,
+      model: target.model,
+      protocol: target.protocol,
+      sample: text.slice(0, 120),
+      usage,
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - started,
+      error: String((e as Error).message ?? e).slice(0, 500),
+    }
+  }
+})
 
 app.get('/api/v1/health', async () => ({ ok: true, kb: KB_ROOT }))
 
@@ -113,7 +209,7 @@ app.post('/api/v1/ingest', async (req, reply) => {
     return reply.code(404).send({ error: `来源不存在：${body.source}` })
   }
   try {
-    const outcome = await ingestSource({ kbRoot: KB_ROOT, routing: llmRouting(), events: bus }, body.source)
+    const outcome = await ingestSource({ kbRoot: KB_ROOT, routing: await llmRouting(), events: bus }, body.source)
     return outcome
   } catch (e) {
     req.log.error(e)
@@ -132,7 +228,7 @@ app.post('/api/v1/query', async (req, reply) => {
     return reply.code(400).send({ error: '需要 question' })
   }
   try {
-    const outcome = await answerQuery({ kbRoot: KB_ROOT, routing: llmRouting(), events: bus }, body.question, { archive: body.archive })
+    const outcome = await answerQuery({ kbRoot: KB_ROOT, routing: await llmRouting(), events: bus }, body.question, { archive: body.archive })
     return outcome
   } catch (e) {
     req.log.error(e)

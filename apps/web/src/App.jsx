@@ -7,6 +7,7 @@ import Ask from './views/Ask.jsx'
 import Notes from './views/Notes.jsx'
 import Graph from './views/Graph.jsx'
 import Review from './views/Review.jsx'
+import Settings from './views/Settings.jsx'
 
 const NAV = [
   { id: 'overview', icon: '◈', label: '总览' },
@@ -15,6 +16,7 @@ const NAV = [
   { id: 'notes', icon: '✎', label: '笔记' },
   { id: 'review', icon: '☑', label: '审核' },
   { id: 'graph', icon: '⟡', label: '知识图谱' },
+  { id: 'settings', icon: '⚙', label: '设置' },
 ]
 
 /** 路径 → 短标题（wiki/concepts/知识复利.md → 知识复利） */
@@ -157,6 +159,7 @@ export default function App() {
         {view === 'notes' && <Notes onOpenPage={openPage} />}
         {view === 'graph' && <Graph onOpenPage={openPage} />}
         {view === 'review' && <Review />}
+{view === 'settings' && <Settings />}
       </main>
       <PageDrawer pagePath={pagePath} onClose={closeDrawer} />
     </div>

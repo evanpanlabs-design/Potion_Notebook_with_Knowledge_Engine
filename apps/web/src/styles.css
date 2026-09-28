@@ -519,3 +519,27 @@ span.wikilink {
 .op-badge.op-lint { background: var(--c-bg); color: var(--c-text-3); }
 .timeline-title { flex: 1; min-width: 0; color: var(--c-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .timeline-ts { flex: none; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--c-text-3); }
+
+/* 设置页 · LLM 双引擎配置 */
+.settings-page { padding: 24px 48px 120px; max-width: 860px; }
+.settings-page h1 { font-size: 1.375rem; margin: 0 0 8px; }
+.settings-sub { color: var(--c-text-3); font-size: 0.875rem; line-height: 1.7; margin: 0 0 20px; }
+.settings-sub code { font-family: var(--font-mono); font-size: 0.8125rem; background: var(--c-bg); padding: 1px 6px; border-radius: 4px; }
+.settings-warn { color: #b45309; }
+.settings-role { border-top: 1px solid var(--c-border); padding-top: 20px; margin-bottom: 24px; }
+.settings-role h2 { font-size: 1rem; margin: 0 0 4px; }
+.settings-desc { color: var(--c-text-3); font-size: 0.8125rem; margin: 0 0 16px; }
+.settings-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.settings-field > span { font-size: 0.8125rem; color: var(--c-text-2, var(--c-text)); font-weight: 600; }
+.settings-field input, .settings-field select {
+  border: 1px solid var(--c-border-strong); border-radius: 8px; padding: 8px 12px;
+  font-size: 0.875rem; font-family: inherit; background: var(--c-surface, #fff); color: var(--c-text);
+  min-height: 36px;
+}
+.settings-field input:focus, .settings-field select:focus { outline: none; border-color: var(--c-primary); }
+.settings-testrow { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
+.test-ok { color: #166534; font-size: 0.8125rem; font-family: var(--font-mono); }
+.test-fail { color: #991b1b; font-size: 0.8125rem; }
+.settings-saverow { display: flex; align-items: center; gap: 14px; border-top: 1px solid var(--c-border); padding-top: 20px; }
+.settings-hint { color: var(--c-text-3); font-size: 0.8125rem; }
+.banner-err { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }

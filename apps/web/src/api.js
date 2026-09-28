@@ -22,4 +22,7 @@ export const api = {
   reviewQueue: () => j('/api/review-queue'),
   review: (path, action) => post('/api/review', { path, action }),
   log: () => j('/api/log'),
+  llmConfig: () => j('/api/llm-config'),
+  saveLlmConfig: (ingest, query) => post('/api/llm-config', { ingest, query }),
+  testLlmConfig: (role, config) => post('/api/llm-config/test', { role, config }),
 }

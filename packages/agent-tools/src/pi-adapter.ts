@@ -11,6 +11,10 @@ import {
   stream as openaiCompletionsStream,
   streamSimple as openaiCompletionsStreamSimple,
 } from '@earendil-works/pi-ai/api/openai-completions'
+import {
+  stream as anthropicMessagesStream,
+  streamSimple as anthropicMessagesStreamSimple,
+} from '@earendil-works/pi-ai/api/anthropic-messages'
 import type {
   AssistantMessageEvent,
   AssistantMessageEventStream,
@@ -19,11 +23,13 @@ import type {
 import { globalRpmGate } from './rpm-queue.ts'
 
 export interface LlmEndpointConfig {
-  /** OpenAI 兼容 base URL，如 https://api.example.com/v1 */
+  /** OpenAI 兼容 base URL，如 https://api.example.com/v1；Anthropic 协议填到域名根（SDK 自动补 /v1/messages） */
   baseUrl: string
   apiKey: string
   /** 模型 id（provider 内部） */
   model: string
+  /** 请求协议：openai = OpenAI 兼容 chat/completions；anthropic = Anthropic messages（默认 openai） */
+  protocol?: 'openai' | 'anthropic'
   /** 展示名 */
   label?: string
 }
@@ -39,7 +45,7 @@ export type TaskKind = 'ingest' | 'query'
 export interface ResolvedModel {
   providerId: string
   modelId: string
-  model: Model<'openai-completions'>
+  model: Model<'openai-completions'> | Model<'anthropic-messages'>
   config: LlmEndpointConfig
 }
 
@@ -52,8 +58,9 @@ export interface SimpleMessage {
 }
 
 function buildProvider(config: LlmEndpointConfig, id: string) {
-  const model: Model<'openai-completions'> = {
-    api: 'openai-completions',
+  const protocol = config.protocol === 'anthropic' ? 'anthropic-messages' : 'openai-completions'
+  const model = {
+    api: protocol,
     id: config.model,
     provider: id,
     name: config.label ?? config.model,
@@ -63,14 +70,25 @@ function buildProvider(config: LlmEndpointConfig, id: string) {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 8192,
-  }
+  } as never as Model<'openai-completions'> | Model<'anthropic-messages'>
 
-  return createProvider<'openai-completions'>({
+  const api =
+    protocol === 'anthropic-messages'
+      ? {
+          stream: anthropicMessagesStream as never,
+          streamSimple: anthropicMessagesStreamSimple as never,
+        }
+      : {
+          stream: openaiCompletionsStream as never,
+          streamSimple: openaiCompletionsStreamSimple as never,
+        }
+
+  return createProvider({
     id,
     name: config.label ?? id,
     baseUrl: config.baseUrl,
     auth: {
-      // OpenAI 兼容：静态 Bearer key，无交互式 login
+      // 静态 Bearer key（OpenAI 兼容）/ x-api-key（Anthropic），无交互式 login
       apiKey: {
         name: `${config.label ?? id} API key`,
         resolve: async () => ({
@@ -80,10 +98,7 @@ function buildProvider(config: LlmEndpointConfig, id: string) {
       },
     },
     models: [model],
-    api: {
-      stream: openaiCompletionsStream as never,
-      streamSimple: openaiCompletionsStreamSimple as never,
-    },
+    api,
   })
 }
 

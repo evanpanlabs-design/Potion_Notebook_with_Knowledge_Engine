@@ -93,6 +93,8 @@ LLM_MODEL_QUERY=gpt-4o          # 问答用（可选）
 
 详见 [docs/demo/demo-script.md](docs/demo/demo-script.md)：投喂 → 消化成 wiki → 写笔记互链 → 跨来源提问 → 审核把关 → 图谱形状 → git 回滚。
 
+本地复现请用 **[录制台本](docs/demo/recording-script.md)**：12 步全流程 step-by-step（含 LLM 配置、全部粘贴素材与提问文案，素材在 `docs/demo/materials/`）。
+
 ## 真实操作录屏（agent-browser 实录，未剪辑）
 
 - [▶ demo-part1.mp4](docs/demo/demo.mp4)（约 5 分 50 秒）：总览 → 投喂费曼素材 → 引擎两段式消化全程（含 LLM 等待，未加速）→ 切入笔记视图
