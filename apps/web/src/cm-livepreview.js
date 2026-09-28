@@ -12,6 +12,15 @@ import { ViewPlugin, Decoration, EditorView } from '@codemirror/view'
 
 const HIDDEN = () => Decoration.replace({})
 
+/** frontmatter 行号范围（文档以 --- 开头时，返回 [首行, 闭合行]，否则 null） */
+function frontmatterRange(doc) {
+  if (doc.lines < 2 || doc.line(1).text.trim() !== '---') return null
+  for (let n = 2; n <= Math.min(doc.lines, 30); n++) {
+    if (doc.line(n).text.trim() === '---') return [1, n]
+  }
+  return null
+}
+
 function buildDeco(view) {
   const decos = []
   const selLines = new Set()
@@ -26,6 +35,13 @@ function buildDeco(view) {
       pos = line.to + 1
       const text = line.text
       const cursorIn = selLines.has(line.number)
+
+      // frontmatter：整块弱化为属性区（Obsidian 式观感）
+      const fm = frontmatterRange(view.state.doc)
+      if (fm && line.number >= fm[0] && line.number <= fm[1]) {
+        decos.push(Decoration.line({ class: 'cm-fm' }).range(line.from))
+        continue
+      }
 
       // 标题：# / ## / ###
       const h = /^(#{1,3})(\s+)(.*)$/.exec(text)
