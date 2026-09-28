@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.env.*
+*.log
+data/
+spike/pi-spike-out/
+spike/pi-spike-sample/

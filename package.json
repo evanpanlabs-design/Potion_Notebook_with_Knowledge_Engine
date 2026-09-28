@@ -1,0 +1,24 @@
+{
+  "name": "knowledge-engine",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "替你消化知识的笔记本 —— Note 与 Wiki 双向一等公民（PRD v0.2）",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "node --test packages/core/test/*.test.ts",
+    "typecheck": "tsc -p packages/core --noEmit && tsc -p packages/agent-tools --noEmit && tsc -p apps/server --noEmit",
+    "start": "npm run dev --workspace apps/server",
+    "spike:pi": "node --env-file-if-exists=.env spike/pi-smoke.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.3",
+    "typescript": "5.9.3"
+  }
+}

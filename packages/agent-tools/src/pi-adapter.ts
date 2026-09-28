@@ -1,0 +1,140 @@
+/**
+ * pi-ai 适配层（ARCHITECTURE §11：packages/agent-tools 是唯一 import pi 的地方）。
+ *
+ * 职责：
+ * 1. 把用户的 OpenAI 兼容端点（baseUrl + apiKey + model）注册为 pi 自定义 provider
+ * 2. 提供两类路由（ADR-001 / ARCHITECTURE §3）：ingest → 便宜模型，query → 强模型
+ * 3. stream() 返回归一化的文本流；上游 pi 版本升级时只改本文件
+ */
+import { createModels, createProvider } from '@earendil-works/pi-ai'
+import {
+  stream as openaiCompletionsStream,
+  streamSimple as openaiCompletionsStreamSimple,
+} from '@earendil-works/pi-ai/api/openai-completions'
+import type {
+  AssistantMessageEvent,
+  AssistantMessageEventStream,
+  Model,
+} from '@earendil-works/pi-ai'
+
+export interface LlmEndpointConfig {
+  /** OpenAI 兼容 base URL，如 https://api.example.com/v1 */
+  baseUrl: string
+  apiKey: string
+  /** 模型 id（provider 内部） */
+  model: string
+  /** 展示名 */
+  label?: string
+}
+
+export interface RoutingConfig {
+  ingest: LlmEndpointConfig
+  query: LlmEndpointConfig
+}
+
+export type TaskKind = 'ingest' | 'query'
+
+/** 归一化模型句柄：任务路由后可拿到 (providerId, modelId) */
+export interface ResolvedModel {
+  providerId: string
+  modelId: string
+  model: Model<'openai-completions'>
+  config: LlmEndpointConfig
+}
+
+/** 简单消息形状（适配层不暴露 pi 的完整消息类型）
+ * 注：历史 assistant 消息需要完整运行时字段（usage/stopReason 等），
+ * 多轮对话重建在 D5（Query 管道）落地，当前管道只需 user/system */
+export interface SimpleMessage {
+  role: 'user' | 'system'
+  text: string
+}
+
+function buildProvider(config: LlmEndpointConfig, id: string) {
+  const model: Model<'openai-completions'> = {
+    api: 'openai-completions',
+    id: config.model,
+    provider: id,
+    name: config.label ?? config.model,
+    baseUrl: config.baseUrl,
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  }
+
+  return createProvider<'openai-completions'>({
+    id,
+    name: config.label ?? id,
+    baseUrl: config.baseUrl,
+    auth: {
+      // OpenAI 兼容：静态 Bearer key，无交互式 login
+      apiKey: {
+        name: `${config.label ?? id} API key`,
+        resolve: async () => ({
+          auth: { apiKey: config.apiKey, baseUrl: config.baseUrl },
+          source: 'static-config',
+        }),
+      },
+    },
+    models: [model],
+    api: {
+      stream: openaiCompletionsStream as never,
+      streamSimple: openaiCompletionsStreamSimple as never,
+    },
+  })
+}
+
+/** 建立带路由的 Models 集合（每次调用独立构建，无全局状态） */
+export function createRouting(config: RoutingConfig) {
+  const models = createModels()
+  models.setProvider(buildProvider(config.ingest, 'ke-ingest'))
+  models.setProvider(buildProvider(config.query, 'ke-query'))
+  return {
+    resolve(kind: TaskKind): ResolvedModel {
+      const c = kind === 'ingest' ? config.ingest : config.query
+      const providerId = kind === 'ingest' ? 'ke-ingest' : 'ke-query'
+      const m = models.getModel(providerId, c.model)
+      if (!m) throw new Error(`pi 适配层：模型未注册 (${providerId}/${c.model})`)
+      return {
+        providerId,
+        modelId: c.model,
+        model: m as Model<'openai-completions'>,
+        config: c,
+      }
+    },
+    /** 流式调用：返回 pi 的 AssistantMessageEventStream（调用方消费 text_delta） */
+    stream(kind: TaskKind, systemPrompt: string | undefined, messages: SimpleMessage[]): AssistantMessageEventStream {
+      const resolved = this.resolve(kind)
+      // pi Message 是判别联合：按 role 分支构造
+      const now = Date.now()
+      return models.stream(resolved.model, {
+        systemPrompt,
+        messages: messages.map((m) =>
+          m.role === 'user'
+            ? { role: 'user', content: m.text, timestamp: now }
+            : { role: 'system', content: m.text, timestamp: now },
+        ),
+      })
+    },
+  }
+}
+
+/** 从事件流中收集纯文本（spike 与 ingest Phase1/2 的辅助函数） */
+export async function collectText(stream: AssistantMessageEventStream): Promise<{ text: string; events: AssistantMessageEvent[] }> {
+  const chunks: string[] = []
+  const events: AssistantMessageEvent[] = []
+  for await (const ev of stream) {
+    events.push(ev)
+    if (ev.type === 'text_delta' && 'text' in ev) {
+      chunks.push((ev as { text: string }).text)
+    }
+  }
+  const done = events.find((e) => e.type === 'done')
+  if (!done) {
+    const err = events.find((e) => e.type === 'error')
+    throw new Error(`pi 适配层：流未正常结束（${err ? JSON.stringify(err) : '无 done 事件'}）`)
+  }
+  return { text: chunks.join(''), events }
+}

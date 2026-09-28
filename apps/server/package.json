@@ -1,0 +1,13 @@
+{
+  "name": "@ke/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env src/index.ts"
+  },
+  "dependencies": {
+    "@ke/core": "*",
+    "fastify": "^5.0.0"
+  }
+}
