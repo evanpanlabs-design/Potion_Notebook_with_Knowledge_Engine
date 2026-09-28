@@ -1,0 +1,19 @@
+{
+  "name": "spike-codemirror",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5174",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "codemirror": "^6.0.0",
+    "@codemirror/lang-markdown": "^6.3.0",
+    "@codemirror/autocomplete": "^6.18.0",
+    "@codemirror/view": "^6.36.0",
+    "@codemirror/state": "^6.5.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

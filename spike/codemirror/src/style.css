@@ -1,0 +1,8 @@
+/* CodeMirror spike 样式：wikilink 高亮仿 Obsidian */
+.cm-wikilink {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+  border-radius: 2px;
+  cursor: pointer;
+}
+#editor { border: 1px solid #ddd; border-radius: 4px; max-width: 860px; }
