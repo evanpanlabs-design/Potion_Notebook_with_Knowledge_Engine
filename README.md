@@ -93,6 +93,13 @@ LLM_MODEL_QUERY=gpt-4o          # 问答用（可选）
 
 详见 [docs/demo/demo-script.md](docs/demo/demo-script.md)：投喂 → 消化成 wiki → 写笔记互链 → 跨来源提问 → 审核把关 → 图谱形状 → git 回滚。
 
+## 真实操作录屏（agent-browser 实录，未剪辑）
+
+- [▶ demo-part1.webm](docs/demo/demo.webm)（约 5 分 50 秒）：总览 → 投喂费曼素材 → 引擎两段式消化全程（含 LLM 等待，未加速）→ 切入笔记视图
+- [▶ demo-part2.webm](docs/demo/demo-part2.webm)（约 3 分钟）：总览时间线 → 跨来源提问（含引用与"无依据不编造"判定）→ 审核通过一篇（队列 24→23）→ 知识图谱（29 节点 72 连线，笔记节点为琥珀色）
+
+> 录屏为真实浏览器操作逐帧记录，保留全部等待时间，可作为"未剪辑的真实性证明"。关键节点截图见上方各节。
+
 ---
 
 local-first · 纯 Markdown · 无锁定 · 2027 春招作品集项目
