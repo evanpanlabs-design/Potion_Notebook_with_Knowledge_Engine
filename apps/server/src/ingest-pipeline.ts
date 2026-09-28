@@ -285,8 +285,17 @@ async function sha256(text: string): Promise<string> {
 }
 
 function firstSentence(body: string): string {
-  const t = body.replace(/^#+.*\n/, '').replace(/\s+/g, ' ').trim()
-  return t.slice(0, 80)
+  const t = body.trim().replace(/^(#+.*\n)+/, '').replace(/\s+/g, ' ').trim()
+  // 硬窗口 100 字，但不得落在 [[wikilink]] 内部（否则产生 [[xxx 残链）
+  let end = Math.min(t.length, 100)
+  const lastOpen = t.lastIndexOf('[[', end)
+  const lastClose = t.lastIndexOf(']]', end)
+  if (lastOpen !== -1 && (lastClose === -1 || lastClose < lastOpen)) {
+    end = lastOpen // 截断点在未闭合 wikilink 内 → 回退到 [[ 之前
+  }
+  // 窗口内取第一个完整句（。！？!?），让摘要语义完整
+  const m = /[。！？!?]/.exec(t.slice(0, end))
+  return m?.index !== undefined ? t.slice(0, m.index + 1) : t.slice(0, end)
 }
 
 /** 全库 git 提交（无 .git 时静默返回 null）。gate executor 与笔记保存共用，保持"一次操作=一次提交"规范 */
