@@ -7,6 +7,7 @@ import process from 'node:process'
 import { initKb, scanKb } from '@ke/core'
 import { createRouting } from '@ke/agent-tools'
 import { ingestSource } from './ingest-pipeline.ts'
+import { answerQuery, buildGraphData } from './query-pipeline.ts'
 
 /**
  * server 入口（D2-4e）。本地单用户，绑 127.0.0.1，无鉴权。
@@ -83,6 +84,43 @@ app.post('/api/v1/ingest', async (req, reply) => {
     req.log.error(e)
     return reply.code(500).send({ error: String((e as Error).message ?? e) })
   }
+})
+
+interface QueryBody {
+  question: string
+  archive?: boolean
+}
+
+app.post('/api/v1/query', async (req, reply) => {
+  const body = req.body as QueryBody
+  if (!body?.question?.trim()) {
+    return reply.code(400).send({ error: '需要 question' })
+  }
+  try {
+    const outcome = await answerQuery({ kbRoot: KB_ROOT, routing: llmRouting(), events: bus }, body.question, { archive: body.archive })
+    return outcome
+  } catch (e) {
+    req.log.error(e)
+    return reply.code(500).send({ error: String((e as Error).message ?? e) })
+  }
+})
+
+/** 图谱数据（F7 前端直接消费） */
+app.get('/api/v1/graph', async () => buildGraphData(KB_ROOT))
+
+/** 笔记读写（F4 server 侧）：notes/ 由人所有，不走闸门（用户直接写） */
+app.post('/api/v1/notes', async (req, reply) => {
+  const body = req.body as { filename?: string; content?: string }
+  if (!body?.filename || typeof body.content !== 'string') {
+    return reply.code(400).send({ error: '需要 filename 与 content' })
+  }
+  if (!/^[\w\u4e00-\u9fff.-]+\.md$/.test(body.filename)) {
+    return reply.code(400).send({ error: 'filename 仅允许 .md' })
+  }
+  await mkdir(path.join(KB_ROOT, 'notes'), { recursive: true })
+  await writeFile(path.join(KB_ROOT, 'notes', body.filename), body.content, 'utf8')
+  bus.emit('note:saved', body.filename)
+  return { ok: true, path: `notes/${body.filename}` }
 })
 
 /** 库状态快照（前端建库后首页用） */

@@ -67,10 +67,11 @@ JSON schema：
 
 const GENERATE_PROMPT = `你是知识库的"写作器"。基于给定的分析结果，为每个实体/概念写 wiki 页正文。
 要求：
-1. body：Markdown 正文，200-400 字；第一段给定义/一句话概括；用 [[wikilink]] 互链；引用主张处标注 sources 数组中的来源名
-2. sources：本页用到的来源引用（形如 sources/xxx.md 或 URL）
-3. 不要编造分析结果之外的事实
-4. 输出 JSON：{"pages":[{"name":"...","body":"...","sources":["..."]}]}，pages 顺序与输入条目一致`
+1. body：Markdown 正文，200-400 字；第一段给定义/一句话概括
+2. 引用规则（严格）：主张出处用行内标注 [[页面名]]，页面名用其他实体/概念的 title 原样（如 [[Karpathy]]、[[知识复利]]）；不要用 [[sources/...]] 路径形式；信息确实无对应页面可链时，用普通文本标注 (来源: 来源名) 即可
+3. sources：本页用到的来源引用（形如 sources/xxx.md，与 frontmatter 对应）
+4. 不要编造分析结果之外的事实
+5. 输出 JSON：{"pages":[{"name":"...","body":"...","sources":["..."]}]}，pages 顺序与输入条目一致`
 
 // ---------- 管道 ----------
 
