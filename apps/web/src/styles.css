@@ -380,11 +380,9 @@ a.wikilink:hover { background: #dbeafe; text-decoration: underline; }
 .editor-host .cm-editor { height: 100%; min-height: 420px; font-size: 0.9375rem; }
 .editor-host .cm-editor.cm-focused { outline: none; }
 .editor-host .cm-scroller { font-family: var(--font-body); line-height: 1.7; }
-/* 正文呼吸感：限宽居中 + 左右留白 + 底部滚动余量（Obsidian 式 scroll-past-end） */
+/* 正文呼吸感：只约定左右留白 + 底部滚动余量（Obsidian 式 scroll-past-end），不限宽 */
 .editor-host .cm-content {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 24px 40px 320px;
+  padding: 24px 48px 320px;
 }
 .cm-wikilink { color: var(--c-primary); font-weight: 600; background: var(--c-primary-soft); border-radius: 2px; }
 .cm-tooltip.cm-tooltip-autocomplete > ul { font-family: var(--font-body); font-size: 0.875rem; border-radius: var(--r-md); border: 1px solid var(--c-border); box-shadow: var(--shadow-pop); }
