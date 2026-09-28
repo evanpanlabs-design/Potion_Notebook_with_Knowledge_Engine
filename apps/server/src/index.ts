@@ -395,6 +395,55 @@ app.get('/api/v1/pages/*', async (req, reply) => {
   }
 })
 
+/** SSE 事件流：把 bus 上的管道事件实时推给 web，消除“黑盒等待”。
+ *  web 经 vite 代理调 /api/events → 此处（代理会把 /api 重写为 /api/v1）。
+ *  连接期间挂已知事件 + 25s 心跳注释行（防代理空闲断连）；客户端断开时移除监听。 */
+const SSE_EVENTS = [
+  'source:added',
+  'llm:start',
+  'llm:delta',
+  'llm:done',
+  'analyze:start',
+  'analyze:done',
+  'generate:start',
+  'generate:done',
+  'gate:rejected',
+  'commit',
+  'note:saved',
+  'review:done',
+  'retrieve:done',
+  'query:done',
+] as const
+
+app.get('/api/v1/events', (req, reply) => {
+  reply.hijack()
+  const raw = reply.raw
+  raw.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  })
+  raw.write('retry: 3000\n\n') // 客户端断线后 3s 自动重连
+  const send = (name: string, data: unknown) => {
+    try {
+      raw.write(`event: ${name}\ndata: ${JSON.stringify(data ?? null)}\n\n`)
+    } catch { /* 连接已断，等 close 清理 */ }
+  }
+  const listeners = SSE_EVENTS.map((name) => {
+    const fn = (...args: unknown[]) => send(name, args.length <= 1 ? args[0] : args)
+    bus.on(name, fn)
+    return [name, fn] as const
+  })
+  const heartbeat = setInterval(() => {
+    try { raw.write(': ping\n\n') } catch { /* ignore */ }
+  }, 25_000)
+  req.raw.on('close', () => {
+    clearInterval(heartbeat)
+    for (const [name, fn] of listeners) bus.off(name, fn)
+  })
+})
+
 app.listen({ port: PORT, host: '127.0.0.1' }).then(async () => {
   await mkdir(KB_ROOT, { recursive: true })
   await ensureKbGit(KB_ROOT)

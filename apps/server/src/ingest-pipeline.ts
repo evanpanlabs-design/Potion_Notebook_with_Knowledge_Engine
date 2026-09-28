@@ -126,7 +126,7 @@ export async function ingestSource(
   events.emit('analyze:start', sourceRel)
   const { Value } = await import('@sinclair/typebox/value')
   const analyzeCtx = await buildContextMessages(deps, sourceText)
-  const phase1 = await callLlmJson<AnalysisReportT>(routing, 'ingest', ANALYZE_PROMPT, analyzeCtx, AnalysisReport)
+  const phase1 = await callLlmJson<AnalysisReportT>(routing, 'ingest', ANALYZE_PROMPT, analyzeCtx, AnalysisReport, { events, phase: 'analyze' })
   if (!Value.Check(AnalysisReport, phase1.report)) {
     const errs = [...Value.Errors(AnalysisReport, phase1.report)].map((e) => `${e.path}: ${e.message}`)
     throw new Error(`ingest: Phase1 分析输出不合 schema：\n${errs.join('\n')}`)
@@ -143,6 +143,7 @@ export async function ingestSource(
     GENERATE_PROMPT,
     [{ role: 'user', text: JSON.stringify({ source: sourceRel, entries }, null, 2) }],
     GenerationResult,
+    { events, phase: 'generate' },
   )
   if (!Value.Check(GenerationResult, phase2.report)) {
     const errs = [...Value.Errors(GenerationResult, phase2.report)].map((e) => `${e.path}: ${e.message}`)
@@ -267,15 +268,24 @@ interface LlmCallResult<T> {
   tokens: { input: number; output: number }
 }
 
+/** 流式调用选项：maxRepair 自动修复轮数；events/phase 用于把 LLM 增量转发到事件总线
+ *  （llm:start / llm:delta / llm:done），供 SSE 层把“引擎正在逐字生成”显化到前端。 */
+interface StreamOpts {
+  maxRepair?: number
+  events?: EventEmitter
+  phase?: 'analyze' | 'generate'
+}
+
 async function callLlmJson<T>(
   routing: IngestDeps['routing'],
   kind: 'ingest' | 'query',
   systemPrompt: string,
   messages: SimpleMessage[],
   schema?: import('@sinclair/typebox').TSchema,
-  maxRepair = 1,
+  opts: StreamOpts = {},
 ): Promise<LlmCallResult<T>> {
   const { Value } = await import('@sinclair/typebox/value')
+  const maxRepair = opts.maxRepair ?? 1
   let currentMessages = [...messages]
   let lastReport: unknown = undefined
   for (let attempt = 0; attempt <= maxRepair; attempt++) {
@@ -288,10 +298,18 @@ async function callLlmJson<T>(
         try {
           chunks.length = 0
           usage = { input: 0, output: 0 }
+          const startedAt = Date.now()
+          let firstByteAt = 0
+          opts.events?.emit('llm:start', { phase: opts.phase })
           for await (const ev of routing.stream(kind, systemPrompt, currentMessages)) {
-            if (ev.type === 'text_delta' && ev.delta) chunks.push(ev.delta)
+            if (ev.type === 'text_delta' && ev.delta) {
+              if (!firstByteAt) firstByteAt = Date.now()
+              chunks.push(ev.delta)
+              opts.events?.emit('llm:delta', { phase: opts.phase, delta: ev.delta })
+            }
             if (ev.type === 'done' && ev.message?.usage) usage = { input: ev.message.usage.input ?? 0, output: ev.message.usage.output ?? 0 }
           }
+          opts.events?.emit('llm:done', { phase: opts.phase, firstByteMs: firstByteAt ? firstByteAt - startedAt : null, totalMs: Date.now() - startedAt })
           break
         } catch (err) {
           const msg = String((err as Error)?.message ?? err)
@@ -302,17 +320,29 @@ async function callLlmJson<T>(
       }
       return { text: chunks.join(''), usage }
     })()
-    const report = parseLlmJson<T>(text)
-    lastReport = report
-    if (!schema || Value.Check(schema, report)) {
-      return { report, tokens: usage }
+    // 解析失败（非法 JSON）不再直接 throw 穿透修复循环：与 schema 失败同等回喂修复
+    let report: unknown
+    let parseErrMsg: string | null = null
+    try {
+      report = parseLlmJson<T>(text)
+    } catch (e) {
+      parseErrMsg = String((e as Error)?.message ?? e)
     }
-    if (attempt >= maxRepair) break
-    // 自修复：把校验错误清单回喂
-    const errs = [...Value.Errors(schema, report)].slice(0, 10).map((e) => `${e.path}: ${e.message}`)
+    lastReport = report
+    if (parseErrMsg === null && (!schema || Value.Check(schema, report))) {
+      return { report: report as T, tokens: usage }
+    }
+    if (attempt >= maxRepair) {
+      if (parseErrMsg) throw new Error(`LLM 输出无法解析为 JSON（已重试 ${maxRepair} 轮）：${parseErrMsg}`)
+      break
+    }
+    // 自修复：把解析/schema 错误清单回喂
+    const errs = parseErrMsg
+      ? [parseErrMsg]
+      : [...Value.Errors(schema!, report!)].slice(0, 10).map((e) => `${e.path}: ${e.message}`)
     currentMessages = [
       ...currentMessages,
-      { role: 'user', text: `你上一轮输出的 JSON 未通过 schema 校验，错误如下：\n${errs.join('\n')}\n\n请输出修正后的完整 JSON（仍然只输出 JSON）。` },
+      { role: 'user', text: `你上一轮输出${parseErrMsg ? '不是合法 JSON' : '未通过 schema 校验'}，错误如下：\n${errs.join('\n')}\n\n请输出修正后的完整 JSON（仍然只输出 JSON）。` },
     ]
   }
   // 走到这说明重试后仍不合规（或 maxRepair=0）：由调用方决定是否抛错
