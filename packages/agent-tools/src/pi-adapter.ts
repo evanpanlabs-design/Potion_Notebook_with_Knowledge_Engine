@@ -16,6 +16,7 @@ import type {
   AssistantMessageEventStream,
   Model,
 } from '@earendil-works/pi-ai'
+import { globalRpmGate } from './rpm-queue.ts'
 
 export interface LlmEndpointConfig {
   /** OpenAI 兼容 base URL，如 https://api.example.com/v1 */
@@ -104,19 +105,46 @@ export function createRouting(config: RoutingConfig) {
         config: c,
       }
     },
-    /** 流式调用：返回 pi 的 AssistantMessageEventStream（调用方消费 text_delta） */
+    /** 直连流（不*RPM 门控，供 gated 包装调用；外部请勿直接用） */
+    rawStream(resolved: ResolvedModel, context: { systemPrompt?: string; messages: unknown[] }): AssistantMessageEventStream {
+      return models.stream(resolved.model, context as never)
+    },
+    /** 流式调用（经 RPM 门控）：返回惰性 AsyncIterable。
+     * 票据在开始迭代时获取、首个事件到达后归还（即限流按“请求发起”计），
+     * 迭代中途异常会释放票据，不会死锁队列 */
     stream(kind: TaskKind, systemPrompt: string | undefined, messages: SimpleMessage[]): AssistantMessageEventStream {
       const resolved = this.resolve(kind)
       // pi Message 是判别联合：按 role 分支构造
       const now = Date.now()
-      return models.stream(resolved.model, {
+      const context = {
         systemPrompt,
         messages: messages.map((m) =>
           m.role === 'user'
             ? { role: 'user', content: m.text, timestamp: now }
             : { role: 'system', content: m.text, timestamp: now },
         ),
-      })
+      }
+      const gate = globalRpmGate()
+      const self = this
+      async function* gated(): AsyncGenerator<AssistantMessageEvent> {
+        await gate.acquire()
+        let released = false
+        const release = () => {
+          if (!released) {
+            released = true
+            gate.release()
+          }
+        }
+        try {
+          for await (const ev of self.rawStream(resolved, context)) {
+            release() // 首个事件已到：请求已发起，窗口占用完成
+            yield ev
+          }
+        } finally {
+          release() // 异常/中断也要释放票据
+        }
+      }
+      return gated() as never as AssistantMessageEventStream
     },
   }
 }
