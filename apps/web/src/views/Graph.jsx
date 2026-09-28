@@ -118,14 +118,13 @@ export default function GraphView({ onOpenPage }) {
       )}
 
       {graph && layout && (
-        <div className="graph-layout">
-          <div className="graph-canvas" style={{ height: 'auto' }}>
-            <svg
-              viewBox={`0 0 ${W} ${H}`}
-              style={{ display: 'block', width: '100%' }}
-              role="img"
-              aria-label="知识图谱"
-            >
+        <div className="graph-stage">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            preserveAspectRatio="xMidYMid meet"
+            role="img"
+            aria-label="知识图谱"
+          >
               {graph.edges.map((e, i) => {
                 const a = layout[e.source]
                 const b = layout[e.target]
@@ -168,21 +167,20 @@ export default function GraphView({ onOpenPage }) {
               })}
             </svg>
             <div className="graph-tip">点击节点打开页面 · 连线为 wikilink 引用</div>
-          </div>
-          <div className="card graph-legend">
-            <h3 style={{ fontFamily: 'var(--font-display)', margin: '0 0 8px', fontSize: '1rem' }}>图例</h3>
-            {Object.entries(KIND_LABELS).map(([k, label]) => (
-              <div key={k} className="legend-row">
-                <span className="legend-dot" style={{ background: KIND_COLORS[k] }} />
-                {label}
-                <span className="count">{counts[k] ?? 0}</span>
+            <div className="graph-legend">
+              <h3 style={{ fontFamily: 'var(--font-display)', margin: '0 0 8px', fontSize: '1rem' }}>图例</h3>
+              {Object.entries(KIND_LABELS).map(([k, label]) => (
+                <div key={k} className="legend-row">
+                  <span className="legend-dot" style={{ background: KIND_COLORS[k] }} />
+                  {label}
+                  <span className="count">{counts[k] ?? 0}</span>
+                </div>
+              ))}
+              <div className="legend-row" style={{ borderTop: '1px solid var(--c-border)', paddingTop: 12, marginTop: 4 }}>
+                <span className="count">节点 {graph.nodes.length}</span>
+                <span className="count" style={{ marginLeft: 8 }}>连线 {graph.edges.length}</span>
               </div>
-            ))}
-            <div className="legend-row" style={{ borderTop: '1px solid var(--c-border)', paddingTop: 12, marginTop: 4 }}>
-              <span className="count">节点 {graph.nodes.length}</span>
-              <span className="count" style={{ marginLeft: 8 }}>连线 {graph.edges.length}</span>
             </div>
-          </div>
         </div>
       )}
     </div>

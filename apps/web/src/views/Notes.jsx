@@ -40,6 +40,7 @@ export default function Notes({ onOpenPage }) {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [paneCollapsed, setPaneCollapsed] = useState(false)
   const hostRef = useRef(null)
   const viewRef = useRef(null)
   const pagesRef = useRef([])
@@ -150,65 +151,72 @@ export default function Notes({ onOpenPage }) {
   }
 
   return (
-    <div className="page page-wide">
-      <h1 className="page-title">笔记</h1>
-      <p className="page-desc">
-        你的手写笔记，与 wiki 平级。输入 <code className="mono">[[</code> 可补全引用任意 wiki
-        页面，保存后自动带 frontmatter 入库、提交 git。
-      </p>
-
-      {error && <div className="banner banner-danger">{error}</div>}
-
-      <div className="notes-layout">
-        <div className="card" style={{ padding: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <span className="field-label" style={{ margin: 0 }}>我的笔记</span>
+    <div className="notes-shell">
+      <aside className={`notes-pane ${paneCollapsed ? 'collapsed' : ''}`}>
+        <div className="notes-pane-head">
+          {!paneCollapsed && <span className="pane-title">我的笔记 · {notes.length}</span>}
+          <button
+            className="pane-btn"
+            onClick={() => setPaneCollapsed(!paneCollapsed)}
+            aria-label={paneCollapsed ? '展开笔记列表' : '折叠笔记列表'}
+            title={paneCollapsed ? '展开笔记列表' : '折叠笔记列表'}
+          >
+            {paneCollapsed ? '»' : '«'}
+          </button>
+        </div>
+        {!paneCollapsed && (
+          <div className="notes-pane-body">
             <button className="btn btn-sm btn-secondary" onClick={newNote}>+ 新建</button>
-          </div>
-          <div className="note-list">
-            {notes.length === 0 && <div className="mono" style={{ color: 'var(--c-text-3)', padding: 8 }}>还没有笔记，点“新建”开始写。</div>}
-            {notes.map((n) => (
-              <button
-                key={n.path}
-                className={`note-item ${current?.path === n.path ? 'active' : ''}`}
-                onClick={() => openNote(n)}
-              >
-                <span className="note-title">{n.title}</span>
-                <span className="note-time">{n.updatedAt?.slice(0, 16).replace('T', ' ')}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          {!current && (
-            <div className="empty-state" style={{ height: 480, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              从左侧选择一篇笔记，或新建一篇
-            </div>
-          )}
-          {current && (
-            <div className="editor-wrap">
-              <div className="editor-toolbar">
-                <span className="filename">{current.path} {dirty && <span className="dirty-dot">● 未保存</span>}</span>
-                <button className="btn btn-sm btn-primary" onClick={save} disabled={saving || !dirty}>
-                  {saving ? '保存中…' : '保存'}
+            <div className="note-list">
+              {notes.length === 0 && (
+                <div className="mono" style={{ color: 'var(--c-text-3)', padding: 8 }}>还没有笔记，点“新建”开始写。</div>
+              )}
+              {notes.map((n) => (
+                <button
+                  key={n.path}
+                  className={`note-item ${current?.path === n.path ? 'active' : ''}`}
+                  onClick={() => openNote(n)}
+                >
+                  <span className="note-title">{n.title}</span>
+                  <span className="note-time">{n.updatedAt?.slice(0, 16).replace('T', ' ')}</span>
                 </button>
-              </div>
-              <div className="editor-host" ref={hostRef} />
+              ))}
             </div>
-          )}
-          {message && (
-            <div className="banner banner-success" style={{ marginTop: 12, marginBottom: 0 }}>
-              {message}
+            <div className="notes-pane-foot">
+              输入 [[ 可补全引用任意 wiki 页面；保存后自动带 frontmatter 入库、提交 git。
             </div>
-          )}
-          {graphPages.length === 0 && (
-            <div className="mono" style={{ color: 'var(--c-text-3)', marginTop: 8 }}>
-              提示：wiki 页面名补全需要库里有页面（当前为空）
+          </div>
+        )}
+      </aside>
+
+      <section className="notes-main">
+        {error && <div className="banner banner-danger" style={{ margin: '12px 24px 0' }}>{error}</div>}
+
+        {!current && (
+          <div className="empty-state" style={{ margin: 'auto', border: 'none' }}>
+            从左侧选择一篇笔记，或新建一篇
+          </div>
+        )}
+
+        {current && (
+          <div className="editor-wrap">
+            <div className="editor-toolbar">
+              <span className="filename">{current.path} {dirty && <span className="dirty-dot">● 未保存</span>}</span>
+              <button className="btn btn-sm btn-primary" onClick={save} disabled={saving || !dirty}>
+                {saving ? '保存中…' : '保存'}
+              </button>
             </div>
-          )}
-        </div>
-      </div>
+            <div className="editor-host" ref={hostRef} />
+            {message && <div className="banner banner-success" style={{ margin: 0, borderRadius: 0 }}>{message}</div>}
+          </div>
+        )}
+
+        {graphPages.length === 0 && current && (
+          <div className="mono" style={{ color: 'var(--c-text-3)', padding: '8px 24px' }}>
+            提示：wiki 页面名补全需要库里有页面（当前为空）
+          </div>
+        )}
+      </section>
     </div>
   )
 }

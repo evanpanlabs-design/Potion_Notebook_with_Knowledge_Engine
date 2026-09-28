@@ -62,10 +62,10 @@ export default function Overview({ onOpenPage, go }) {
       )}
 
       {indexPage && (
-        <div className="card">
-          <h3 style={{ fontFamily: 'var(--font-display)', margin: '0 0 16px' }}>库目录 · index.md</h3>
+        <section className="card">
+          <h3 className="doc-label">库目录 · index.md</h3>
           <IndexBody text={indexPage} onOpenPage={onOpenPage} />
-        </div>
+        </section>
       )}
     </div>
   )
