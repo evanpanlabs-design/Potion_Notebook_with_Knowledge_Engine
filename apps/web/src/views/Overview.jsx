@@ -81,7 +81,7 @@ export default function Overview({ onOpenPage, go }) {
         </section>
       )}
 
-      {indexPage && (
+      {status?.pages > 0 && indexPage && (
         <section className="card">
           <h3 className="doc-label">库目录 · index.md</h3>
           <IndexBody text={indexPage} onOpenPage={onOpenPage} />

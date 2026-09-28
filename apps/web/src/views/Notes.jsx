@@ -103,14 +103,23 @@ export default function Notes({ onOpenPage }) {
   }, [])
 
   function newNote() {
-    const name = prompt('新笔记文件名（.md 结尾）', `note-${Date.now().toString(36)}.md`)
-    if (!name) return
-    if (!/\.md$/.test(name)) return setError('文件名需要 .md 结尾')
+    // D12-13 P2：去掉原生 prompt，自动唯一命名，创建后直接聚焦编辑器
+    const existing = new Set(notes.map((n) => n.path))
+    let name = ''
+    for (let i = 0; i < 100; i++) {
+      const cand = i === 0 ? '未命名笔记.md' : `未命名笔记-${i}.md`
+      if (!existing.has(`notes/${cand}`)) {
+        name = cand
+        break
+      }
+    }
+    if (!name) return setError('无法分配新笔记文件名')
     const note = { path: `notes/${name}`, title: name.replace(/\.md$/, ''), updatedAt: '' }
     setCurrent(note)
     setSavedText('')
     setDoc('')
     setDirty(false)
+    setPaneCollapsed(false)
   }
 
   // 挂载/切换笔记时重建编辑器

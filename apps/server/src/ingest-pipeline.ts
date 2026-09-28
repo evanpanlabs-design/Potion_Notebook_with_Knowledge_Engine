@@ -64,6 +64,7 @@ const ANALYZE_PROMPT = `你是知识库的"分析器"。阅读给定材料，产
 5. concepts：值得建"概念页"的核心概念，每概念 2-6 条 claims
 6. 命名约束：entities/concepts 的 name 必须是简短名词（中文 ≤10 字 / 英文 ≤3 个词），禁止用完整句子或长描述作 name
 7. 宁缺毋滥：只收录理解材料所必需的条目，总量 entities+concepts 不超过 12 个
+8. 去重：对照「知识库现有目录」，若材料中的实体/概念与已有条目同义（如 LLM Wiki 与 llm_wiki、卡片盒笔记法与 Zettelkasten 指同一事物），必须沿用已有条目的 name，不要另立新名；确属新事物才建新页
 JSON schema：
 {"summary":"...","language":"zh","source_title":"...","entities":[{"name":"...","definition":"...","aliases":["..."],"claims":[{"statement":"...","locus":"..."}],"tags":["..."]}],"concepts":[同 entities 结构]}`
 
