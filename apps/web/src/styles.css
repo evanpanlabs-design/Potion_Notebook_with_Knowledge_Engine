@@ -543,3 +543,91 @@ span.wikilink {
 .settings-saverow { display: flex; align-items: center; gap: 14px; border-top: 1px solid var(--c-border); padding-top: 20px; }
 .settings-hint { color: var(--c-text-3); font-size: 0.8125rem; }
 .banner-err { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+
+/* ========== v0.2 文档工作台（Notes） ========== */
+.input-sm { min-height: 30px; padding: 4px 10px; font-size: 0.8125rem; }
+.doc-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+.doc-tab {
+  flex: 1; border: 1px solid var(--c-border); background: var(--c-surface, #fff); color: var(--c-text-2);
+  border-radius: 8px; padding: 6px 8px; font-size: 0.8125rem; cursor: pointer; font-weight: 600;
+}
+.doc-tab:hover { background: var(--c-bg); }
+.doc-tab.active { background: var(--c-primary-soft, #eef7f5); border-color: var(--c-primary); color: var(--c-primary); }
+.doc-tree { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 8px; }
+.doc-group-label {
+  font-family: var(--font-mono); font-size: 0.6875rem; font-weight: 700; color: var(--c-text-3);
+  text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 8px 4px;
+}
+.note-row { display: flex; align-items: stretch; border-radius: 8px; }
+.note-row .note-item { flex: 1; min-width: 0; text-align: left; }
+.note-row.active .note-item { background: var(--c-primary-soft, #eef7f5); }
+.note-row-actions { display: none; align-items: center; gap: 2px; padding-right: 6px; }
+.note-row:hover .note-row-actions { display: inline-flex; }
+.icon-btn {
+  flex: none; width: 26px; height: 26px; border: none; background: transparent; color: var(--c-text-3);
+  border-radius: 6px; cursor: pointer; font-size: 0.8125rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+}
+.icon-btn:hover { background: var(--c-bg); color: var(--c-text); }
+.sync-badge {
+  flex: none; font-size: 0.6875rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; margin-left: 8px;
+}
+.sync-badge.ok { background: #ecfdf5; color: #166534; }
+.sync-badge.dirty { background: #fffbeb; color: #b45309; }
+.sync-badge.never { background: var(--c-bg); color: var(--c-text-3); }
+.sync-dot { color: #d97706; margin-left: 6px; font-size: 0.75rem; }
+.archived-tag {
+  flex: none; font-size: 0.6875rem; color: var(--c-text-3); border: 1px solid var(--c-border);
+  border-radius: 4px; padding: 0 5px; margin-left: 8px;
+}
+.reviewed-tag { color: var(--c-success, #16a34a); margin-left: 6px; font-size: 0.75rem; font-weight: 700; }
+.ingest-time { margin-left: 10px; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--c-text-3); }
+.show-archived {
+  display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--c-text-3);
+  padding: 8px; border-top: 1px solid var(--c-border); cursor: pointer;
+}
+.sync-stage-bar {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+  border-top: 1px solid var(--c-border); background: var(--c-bg); font-size: 0.8125rem;
+}
+.sync-result { border-top: 1px solid var(--c-border); }
+.sync-result .banner { border-radius: 0; border-left: none; border-right: none; }
+.sync-detail { padding: 8px 16px; font-size: 0.75rem; color: var(--c-text-2); }
+.sync-detail.warn { color: #b45309; }
+.notes-workbench { padding: 12px 24px 24px; }
+
+/* 引擎工作台（Feed/Notes 共用渲染） */
+.engine-logbox {
+  max-height: 280px; overflow-y: auto; background: var(--c-bg);
+  border: 1px solid var(--c-border); border-radius: 8px; padding: 12px;
+}
+.engine-phase-label { color: var(--c-text-3); font-size: 0.75rem; margin-bottom: 4px; }
+.engine-stream-pre {
+  margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-all; color: var(--c-text-2);
+}
+
+/* ========== v0.2 审核返修池（Review） ========== */
+.rework-tag {
+  flex: none; font-size: 0.6875rem; font-weight: 600; color: #b45309; background: #fffbeb;
+  border-radius: 999px; padding: 1px 8px; margin-left: 8px;
+}
+.rework-tag.deferred { color: var(--c-text-3); background: var(--c-bg); }
+.rework-pool { border-top: 1px solid var(--c-border); padding: 10px 12px 0; }
+.rework-pool-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rework-pool-hint { font-size: 0.75rem; color: var(--c-text-3); padding: 6px 0; line-height: 1.5; }
+.rework-pool-hint.running { color: #b45309; }
+.rework-form { border-top: 1px solid var(--c-border); padding: 14px 48px 20px; background: var(--c-surface, #fff); }
+.rework-form .field-label { display: block; margin-bottom: 6px; font-size: 0.8125rem; font-weight: 600; color: var(--c-text-2); }
+.rework-form-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 10px; }
+.rework-status { color: var(--c-text-3); font-size: 0.75rem; margin-right: auto; }
+
+/* ========== v0.2 问答局部子图（Ask + MiniGraph） ========== */
+.subgraph-trigger { margin-top: 4px; display: flex; align-items: center; gap: 12px; }
+.minigraph-wrap { position: relative; }
+.minigraph-svg { width: 100%; height: auto; display: block; }
+.minigraph-node:hover circle { filter: brightness(0.92); }
+.minigraph-label { font-size: 11px; fill: var(--c-text-2); font-family: var(--font-sans, inherit); }
+.minigraph-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; }
+.minigraph-legend .legend-row { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem; color: var(--c-text-2); }
+.legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+

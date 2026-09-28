@@ -1,33 +1,59 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { api } from '../api.js'
 import MarkdownHost from './MarkdownHost.jsx'
 
 /**
- * D10-11 审核页：AI 生成页默认待审，人在把关（Human-in-the-loop）。
- * 左列 = 待审队列（wiki/ 下 reviewed !== true 的机生页），右列 = 页面预览 + 通过/驳回。
- * 通过 → fm.reviewed = true；驳回 → 删除该页（log 留痕可追溯）。
+ * D10-11 审核页（v0.2）：AI 生成页默认待审，人在把关（Human-in-the-loop）。
+ * 三种处置：通过（fm.reviewed=true）/ 驳回删除 / 返修（附修改意见进返修池）。
+ * 返修池：攒一批意见后「统一修复」让 LLM 集中执行；修复运行期间新返修暂缓进池（deferred）。
  */
 export default function Review() {
   const [queue, setQueue] = useState([])
   const [reviewedCount, setReviewedCount] = useState(0)
-  const [sel, setSel] = useState(null) // 当前选中 {path,title,type,updatedAt}
+  const [maintenanceRunning, setMaintenanceRunning] = useState(false)
+  const [sel, setSel] = useState(null) // 当前选中 {path,title,type,updatedAt,rework}
   const [content, setContent] = useState('')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [flash, setFlash] = useState('')
 
-  const refresh = useCallback(async (keepPath) => {
+  // 返修：意见草稿 + 返修池状态 + 批量修复进度
+  const [reworkNote, setReworkNote] = useState('')
+  const [batchBusy, setBatchBusy] = useState(false)
+  const [batchInfo, setBatchInfo] = useState(null) // {running, processing, done}
+  const pollRef = useRef(null)
+
+  const refresh = useCallback(async () => {
     try {
       const r = await api.reviewQueue()
       setQueue(r.queue)
       setReviewedCount(r.reviewedCount)
+      setMaintenanceRunning(!!r.maintenanceRunning)
       return r.queue
     } catch (e) {
       setError(`读取队列失败：${e.message}`)
       return []
     }
   }, [])
+
+  // 批量修复进度轮询：running 结束后停表并刷新队列
+  const watchBatch = useCallback(async () => {
+    setBatchBusy(true)
+    try {
+      while (true) {
+        const s = await api.reworkStatus()
+        setBatchInfo(s)
+        if (!s.running) break
+        await new Promise((res) => (pollRef.current = setTimeout(res, 1500)))
+      }
+      await refresh()
+    } catch { /* 轮询失败静默，下次操作会重新同步 */ }
+    setBatchBusy(false)
+  }, [refresh])
+
+  const reworkPool = queue.filter((p) => p.rework?.status === 'pending')
+  const deferredCount = queue.filter((p) => p.rework?.status === 'deferred').length
 
   // 初次加载：取队列并选中第一项
   useEffect(() => {
@@ -40,12 +66,14 @@ export default function Review() {
     }
   }, [refresh])
 
-  // 选中项变化：拉取页面内容
+  // 选中项变化：拉取页面内容 + 回显已有返修意见
   useEffect(() => {
     if (!sel) {
       setContent('')
+      setReworkNote('')
       return
     }
+    setReworkNote(sel.rework?.note ?? '')
     let alive = true
     setLoading(true)
     setError('')
@@ -59,13 +87,21 @@ export default function Review() {
     }
   }, [sel])
 
-  const act = async (action) => {
+  const act = async (action, note) => {
     if (!sel || busy) return
     setBusy(true)
     setError('')
     try {
-      await api.review(sel.path, action)
-      setFlash(action === 'approve' ? `已通过：${sel.title}` : `已驳回并删除：${sel.title}`)
+      await api.reviewEx(sel.path, action, note)
+      setFlash(
+        action === 'approve'
+          ? `已通过：${sel.title}`
+          : action === 'rework'
+            ? maintenanceRunning
+              ? `返修意见已记录（批量修复进行中，本条暂缓进池）：${sel.title}`
+              : `已加入返修池：${sel.title}`
+            : `已驳回并删除：${sel.title}`,
+      )
       const q = await refresh()
       setSel(q.find((p) => p.path === sel.path) ?? q[0] ?? null)
     } catch (e) {
@@ -75,12 +111,27 @@ export default function Review() {
     }
   }
 
-  // flash 提示 3s 自动消失
+  const runBatch = async () => {
+    if (batchBusy || reworkPool.length === 0) return
+    setError('')
+    try {
+      await api.reworkRun()
+      setFlash(`统一修复已启动：${reworkPool.length} 页排队处理，运行期间新返修暂缓进池。`)
+      watchBatch()
+    } catch (e) {
+      setError(`批量修复启动失败：${e.message}`)
+    }
+  }
+
+  // flash 提示 3.5s 自动消失
   useEffect(() => {
     if (!flash) return
-    const t = setTimeout(() => setFlash(''), 3000)
+    const t = setTimeout(() => setFlash(''), 3500)
     return () => clearTimeout(t)
   }, [flash])
+
+  // 卸载兜底
+  useEffect(() => () => pollRef.current && clearTimeout(pollRef.current), [])
 
   const stripFm = content.replace(/^---\n[\s\S]*?\n---\n/, '')
 
@@ -98,20 +149,54 @@ export default function Review() {
               className={`note-item ${sel?.path === p.path ? 'active' : ''}`}
               onClick={() => setSel(p)}
             >
-              <span className="note-title">{p.title}</span>
+              <span className="note-title">
+                {p.title}
+                {p.rework && (
+                  <span className={`rework-tag ${p.rework.status === 'deferred' ? 'deferred' : ''}`}>
+                    💬 {p.rework.status === 'deferred' ? '暂缓' : '待返修'}
+                  </span>
+                )}
+              </span>
               <span className="note-meta">{p.type} · {p.path}</span>
             </button>
           ))}
         </div>
-        <div className="notes-pane-foot">已过审 {reviewedCount} 页 · 机生页需人把关后才算正式知识</div>
+
+        {/* 返修池：攒意见 → 统一修复 */}
+        <div className="rework-pool">
+          <div className="rework-pool-head">
+            <span className="pane-title">返修池 · {reworkPool.length}</span>
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={batchBusy || reworkPool.length === 0 || maintenanceRunning}
+              onClick={runBatch}
+            >
+              ⚙ 统一修复
+            </button>
+          </div>
+          {maintenanceRunning && !batchBusy && (
+            <div className="rework-pool-hint">批量修复运行中（可能由其他窗口触发），新返修暂缓进池。</div>
+          )}
+          {batchBusy && batchInfo && (
+            <div className="rework-pool-hint running">
+              修复中：{batchInfo.processing ?? '…'} · 已完成 {batchInfo.done ?? 0} 页
+            </div>
+          )}
+          {deferredCount > 0 && !batchBusy && (
+            <div className="rework-pool-hint">另有 {deferredCount} 条暂缓意见待修复结束后自动回流。</div>
+          )}
+          <div className="notes-pane-foot">已过审 {reviewedCount} 页 · 机生页需人把关后才算正式知识</div>
+        </div>
       </aside>
+
       <section className="notes-main">
         {error && <div className="banner banner-danger">{error}</div>}
         {flash && <div className="banner banner-ok">{flash}</div>}
+        {maintenanceRunning && <div className="banner banner-warning">返修批量修复进行中：新返修意见会暂缓进池，修复结束后统一回流处理。</div>}
         {!sel && !error && (
           <div className="review-blank">
             <p>这里陈列所有 AI 落盘但尚未过审的页面。</p>
-            <p className="review-hint">逐页预览 →「通过」让它转正，或「驳回」删除它。所有操作都会记入 log.md 流水。</p>
+            <p className="review-hint">逐页预览 →「通过」让它转正、「驳回」删除它，或写一条「返修意见」让 LLM 集中修复。所有操作都会记入 log.md 流水。</p>
           </div>
         )}
         {sel && (
@@ -138,6 +223,32 @@ export default function Review() {
               ) : (
                 <MarkdownHost text={stripFm} onOpenPage={() => {}} />
               )}
+            </div>
+            {/* 返修意见区：提交进池 / 已有意见回显 */}
+            <div className="rework-form">
+              <label className="field-label" htmlFor="rework-note">返修意见（驳回之外的柔性处置：说明哪里要改，攒一批后统一让 LLM 修复）</label>
+              <textarea
+                id="rework-note"
+                className="textarea"
+                style={{ minHeight: 64 }}
+                placeholder="如：第二段与来源不符，请核对原文；补充 [[相关概念]] 链接。"
+                value={reworkNote}
+                onChange={(e) => setReworkNote(e.target.value)}
+              />
+              <div className="rework-form-foot">
+                {sel.rework && (
+                  <span className="mono rework-status">
+                    已在池中（{sel.rework.status === 'deferred' ? '暂缓进池' : '待修复'} · {sel.rework.at?.slice(0, 10)}）
+                  </span>
+                )}
+                <button
+                  className="btn btn-secondary"
+                  disabled={busy || !reworkNote.trim()}
+                  onClick={() => act('rework', reworkNote.trim())}
+                >
+                  💬 {sel.rework ? '更新返修意见' : '提交返修'}
+                </button>
+              </div>
             </div>
           </div>
         )}

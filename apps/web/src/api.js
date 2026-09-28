@@ -25,4 +25,15 @@ export const api = {
   llmConfig: () => j('/api/llm-config'),
   saveLlmConfig: (ingest, query) => post('/api/llm-config', { ingest, query }),
   testLlmConfig: (role, config) => post('/api/llm-config/test', { role, config }),
+  // ---- v0.2 · 文档工作台 / 同步 / 返修池 / 子图 ----
+  files: () => j('/api/files'),
+  putPage: (path, content) => j(`/api/pages/${path}`, { method: 'PUT', headers: JSON_HEADERS, body: JSON.stringify({ content }) }),
+  sync: (path) => post('/api/sync', { path }),
+  archiveNote: (path, archived) => post('/api/notes/archive', { path, archived }),
+  deleteNote: (path) => j(`/api/notes?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  saveNoteEx: (filename, content, title, project) => post('/api/notes', { filename, content, title, project }),
+  reviewEx: (path, action, note) => post('/api/review', { path, action, note }),
+  reworkStatus: () => j('/api/review/rework-status'),
+  reworkRun: (items) => post('/api/review/rework-run', { items }),
+  graphSub: (seeds) => j(`/api/graph/sub?seeds=${encodeURIComponent(seeds.join(','))}`),
 }

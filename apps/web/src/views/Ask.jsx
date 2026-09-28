@@ -1,18 +1,25 @@
 import React, { useState } from 'react'
 import { api } from '../api.js'
 import MarkdownHost from './MarkdownHost.jsx'
+import MiniGraph from '../MiniGraph.jsx'
 
-/** 提问页：问知识库 → 带引用回答，无依据明说（零幻觉承诺的 UI 面） */
+/** 提问页：问知识库 → 带引用回答，无依据明说（零幻觉承诺的 UI 面）。
+ *  v0.2：回答完成后可展开「关联知识图谱」——引用页为种子 + 一跳邻居的局部子图。 */
 export default function Ask({ onOpenPage }) {
   const [question, setQuestion] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [outcome, setOutcome] = useState(null)
+  const [subGraph, setSubGraph] = useState(null) // 局部子图数据 {nodes,edges,seeds}
+  const [subLoading, setSubLoading] = useState(false)
+  const [subError, setSubError] = useState('')
 
   async function ask() {
     if (!question.trim() || busy) return
     setError('')
     setOutcome(null)
+    setSubGraph(null)
+    setSubError('')
     setBusy(true)
     try {
       const r = await api.query(question.trim())
@@ -21,6 +28,21 @@ export default function Ask({ onOpenPage }) {
       setError(e.message)
     } finally {
       setBusy(false)
+    }
+  }
+
+  // 拉取问答涉及的局部子图（种子 = 命中页面路径）
+  async function loadSubGraph() {
+    if (subGraph || subLoading || !outcome?.citedPages?.length) return
+    setSubLoading(true)
+    setSubError('')
+    try {
+      const g = await api.graphSub(outcome.citedPages.map((p) => p.path))
+      setSubGraph(g)
+    } catch (e) {
+      setSubError(e.message)
+    } finally {
+      setSubLoading(false)
     }
   }
 
@@ -88,6 +110,24 @@ export default function Ask({ onOpenPage }) {
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* 关联知识图谱：引用页为种子的局部子图（v0.2 第 5 条） */}
+          {outcome.citedPages?.length > 0 && !subGraph && (
+            <div className="subgraph-trigger">
+              <button className="btn btn-secondary" disabled={subLoading} onClick={loadSubGraph}>
+                {subLoading ? <span className="spinner" /> : '✦'} {subLoading ? '正在构建局部子图…' : '✦ 关联知识图谱'}
+              </button>
+              {subError && <span className="mono" style={{ color: 'var(--c-danger, #c66)' }}>加载失败：{subError}</span>}
+            </div>
+          )}
+          {subGraph && (
+            <div className="card">
+              <h3 style={{ fontFamily: 'var(--font-display)', margin: '0 0 8px', fontSize: '1rem' }}>
+                关联知识图谱 · 引用页 + 一跳邻居
+              </h3>
+              <MiniGraph data={subGraph} onOpenPage={onOpenPage} />
             </div>
           )}
 

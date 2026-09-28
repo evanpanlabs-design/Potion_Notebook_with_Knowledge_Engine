@@ -6,6 +6,15 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { markdown } from '@codemirror/lang-markdown'
 import { livePreview, wikilinkClickHandler } from '../cm-livepreview.js'
 import { api } from '../api.js'
+import { useEngineStream, EngineWorkbench, SLOW_HINT_SECONDS, PHASE_LABEL } from '../engine-stream.jsx'
+
+/**
+ * 文档工作台（v0.2 · ADR-002 第 1/2/3 条）：
+ *  - 左栏双 tab：我的笔记（项目分层树，含 ingest 同步徽标、归档/删除）+ 库页面（wiki/sources 全量）
+ *  - 全部文档可查看编辑：notes 走人写通道，wiki/sources 保存走 PUT（保留 frontmatter 溯源）
+ *  - 「同步到知识库」：notes → 快照+两段式 ingest；sources → 重新 ingest；wiki → LLM 局部维护
+ *  - 同步全程 SSE 流式详情（引擎工作台，与投喂页共用 hook）
+ */
 
 /** [[ 触发页面名补全，apply 自动补 ]] */
 function pageNameCompletions(getPages) {
@@ -30,36 +39,33 @@ function pageNameCompletions(getPages) {
   }
 }
 
+const SYNC_BADGE = {
+  synced: { text: '已同步', cls: 'sync-badge ok' },
+  dirty: { text: '有改动未同步', cls: 'sync-badge dirty' },
+  never: { text: '未消化', cls: 'sync-badge never' },
+}
+
 export default function Notes({ onOpenPage }) {
+  const [tab, setTab] = useState('notes') // 'notes' | 'library'
   const [notes, setNotes] = useState([])
+  const [showArchived, setShowArchived] = useState(false)
+  const [libraryFiles, setLibraryFiles] = useState([])
   const [graphPages, setGraphPages] = useState([])
-  const [current, setCurrent] = useState(null) // { path, title }
-  const [doc, setDoc] = useState('') // 编辑器外的受控镜像（用于 dirty 判断）
+  const [current, setCurrent] = useState(null) // { path, title, kind: 'note'|'wiki'|'source'|'meta' }
+  const [doc, setDoc] = useState('')
   const [savedText, setSavedText] = useState('')
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState(null)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [paneCollapsed, setPaneCollapsed] = useState(false)
+  const [newProject, setNewProject] = useState('') // 新建笔记时的项目输入
   const hostRef = useRef(null)
   const viewRef = useRef(null)
   const pagesRef = useRef([])
-
-  // D12-13 修复：dirty 状态广播到全局（App 切视图时 confirm 拦截）+ beforeunload 防误关
-  useEffect(() => {
-    window.__potionNoteDirty = dirty
-    const onBeforeUnload = (e) => {
-      if (dirty) {
-        e.preventDefault()
-        e.returnValue = ''
-      }
-    }
-    window.addEventListener('beforeunload', onBeforeUnload)
-    return () => {
-      window.__potionNoteDirty = false
-      window.removeEventListener('beforeunload', onBeforeUnload)
-    }
-  }, [dirty])
+  const stream = useEngineStream()
 
   const loadNotes = useCallback(async () => {
     try {
@@ -70,10 +76,18 @@ export default function Notes({ onOpenPage }) {
     }
   }, [])
 
-  // 补全候选 = wiki 页面名（图数据可得 title）+ 已有笔记标题
+  const loadLibrary = useCallback(async () => {
+    try {
+      const r = await api.files()
+      setLibraryFiles(r.files)
+    } catch { /* 库为空时静默 */ }
+  }, [])
+
+  // 补全候选 = wiki 页面名 + 已有笔记标题
   useEffect(() => {
     let alive = true
     loadNotes()
+    loadLibrary()
     api
       .graph()
       .then((g) => {
@@ -85,14 +99,15 @@ export default function Notes({ onOpenPage }) {
     return () => {
       alive = false
     }
-  }, [loadNotes])
+  }, [loadNotes, loadLibrary])
 
-  const openNote = useCallback(async (note) => {
+  const openDoc = useCallback(async (item) => {
     setError('')
     setMessage('')
+    setSyncResult(null)
     try {
-      const p = await api.page(note.path)
-      setCurrent(note)
+      const p = await api.page(item.path)
+      setCurrent(item)
       const text = p.content
       setSavedText(text)
       setDoc(text)
@@ -103,19 +118,18 @@ export default function Notes({ onOpenPage }) {
   }, [])
 
   function newNote() {
-    // D12-13 P2：去掉原生 prompt，自动唯一命名，创建后直接聚焦编辑器
+    const prefix = newProject.trim() ? `notes/${newProject.trim()}/` : 'notes/'
     const existing = new Set(notes.map((n) => n.path))
     let name = ''
     for (let i = 0; i < 100; i++) {
-      const cand = i === 0 ? '未命名笔记.md' : `未命名笔记-${i}.md`
-      if (!existing.has(`notes/${cand}`)) {
+      const cand = (i === 0 ? '未命名笔记' : `未命名笔记-${i}`) + '.md'
+      if (!existing.has(prefix + cand)) {
         name = cand
         break
       }
     }
     if (!name) return setError('无法分配新笔记文件名')
-    const note = { path: `notes/${name}`, title: name.replace(/\.md$/, ''), updatedAt: '' }
-    setCurrent(note)
+    setCurrent({ path: prefix + name, title: name.replace(/\.md$/, ''), kind: 'note' })
     setSavedText('')
     setDoc('')
     setDirty(false)
@@ -155,19 +169,30 @@ export default function Notes({ onOpenPage }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.path])
 
+  const isNote = current?.kind === 'note'
+  const noteMeta = isNote ? notes.find((n) => n.path === current?.path) : null
+
   async function save() {
     if (!current || saving) return
     setSaving(true)
     setError('')
     setMessage('')
     try {
-      const filename = current.path.replace(/^notes\//, '')
       const text = viewRef.current.state.doc.toString()
-      const r = await api.saveNote(filename, text, current.title)
+      let r
+      if (isNote) {
+        const relNoPrefix = current.path.replace(/^notes\//, '')
+        const project = relNoPrefix.includes('/') ? relNoPrefix.split('/')[0] : ''
+        const filename = relNoPrefix.split('/').pop()
+        r = await api.saveNoteEx(filename, text, current.title, project)
+        await loadNotes()
+      } else {
+        r = await api.putPage(current.path, text)
+        await loadLibrary()
+      }
       setSavedText(text)
       setDirty(false)
       setMessage(`已保存 · commit ${r.commitSha?.slice(0, 7) ?? '—'}`)
-      loadNotes()
     } catch (e) {
       setError(e.message)
     } finally {
@@ -175,41 +200,187 @@ export default function Notes({ onOpenPage }) {
     }
   }
 
+  /** 同步到知识库：先保存（若有改动）→ POST /sync → SSE 工作台已实时展示过程 */
+  async function syncToKb() {
+    if (!current || syncing || stream.busy) return
+    setSyncing(true)
+    setError('')
+    setMessage('')
+    setSyncResult(null)
+    stream.begin()
+    try {
+      if (dirty) await save()
+      const outcome = await api.sync(current.path)
+      setSyncResult(outcome)
+      setMessage(null)
+      await loadNotes()
+      await loadLibrary()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      stream.end()
+      setSyncing(false)
+    }
+  }
+
+  async function toggleArchive(note) {
+    try {
+      await api.archiveNote(note.path, !note.archived)
+      await loadNotes()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  async function removeNote(note) {
+    if (!window.confirm(`确定删除「${note.title}」？文件将从磁盘移除（git 历史仍可找回）。`)) return
+    try {
+      await api.deleteNote(note.path)
+      if (current?.path === note.path) {
+        setCurrent(null)
+        setDoc('')
+        setSavedText('')
+      }
+      await loadNotes()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  // 左栏：我的笔记按项目分组
+  const visibleNotes = notes.filter((n) => showArchived || !n.archived)
+  const projects = []
+  for (const n of visibleNotes) {
+    let g = projects.find((p) => p.name === n.project)
+    if (!g) {
+      g = { name: n.project, notes: [] }
+      projects.push(g)
+    }
+    g.notes.push(n)
+  }
+  projects.sort((a, b) => (a.name === '' ? -1 : b.name === '' ? 1 : a.name.localeCompare(b.name)))
+
+  // 左栏：库页面按目录分组
+  const libGroups = []
+  for (const f of libraryFiles) {
+    const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '(根目录)'
+    let g = libGroups.find((x) => x.dir === dir)
+    if (!g) {
+      g = { dir, files: [] }
+      libGroups.push(g)
+    }
+    g.files.push(f)
+  }
+
+  const slow = syncing && stream.elapsed >= SLOW_HINT_SECONDS
+  const badge = noteMeta ? SYNC_BADGE[noteMeta.syncState] : null
+
   return (
     <div className="notes-shell">
       <aside className={`notes-pane ${paneCollapsed ? 'collapsed' : ''}`}>
         <div className="notes-pane-head">
-          {!paneCollapsed && <span className="pane-title">我的笔记 · {notes.length}</span>}
+          {!paneCollapsed && <span className="pane-title">文档 · {isNote ? '笔记' : '全库'}</span>}
           <button
             className="pane-btn"
             onClick={() => setPaneCollapsed(!paneCollapsed)}
-            aria-label={paneCollapsed ? '展开笔记列表' : '折叠笔记列表'}
-            title={paneCollapsed ? '展开笔记列表' : '折叠笔记列表'}
+            aria-label={paneCollapsed ? '展开列表' : '折叠列表'}
+            title={paneCollapsed ? '展开列表' : '折叠列表'}
           >
             {paneCollapsed ? '»' : '«'}
           </button>
         </div>
         {!paneCollapsed && (
           <div className="notes-pane-body">
-            <button className="btn btn-sm btn-secondary" onClick={newNote}>+ 新建</button>
-            <div className="note-list">
-              {notes.length === 0 && (
-                <div className="mono" style={{ color: 'var(--c-text-3)', padding: 8 }}>还没有笔记，点“新建”开始写。</div>
-              )}
-              {notes.map((n) => (
-                <button
-                  key={n.path}
-                  className={`note-item ${current?.path === n.path ? 'active' : ''}`}
-                  onClick={() => openNote(n)}
-                >
-                  <span className="note-title">{n.title}</span>
-                  <span className="note-time">{n.updatedAt?.slice(0, 16).replace('T', ' ')}</span>
-                </button>
-              ))}
+            <div className="doc-tabs">
+              <button className={`doc-tab ${tab === 'notes' ? 'active' : ''}`} onClick={() => setTab('notes')}>
+                我的笔记 · {notes.length}
+              </button>
+              <button className={`doc-tab ${tab === 'library' ? 'active' : ''}`} onClick={() => setTab('library')}>
+                库页面 · {libraryFiles.length}
+              </button>
             </div>
-            <div className="notes-pane-foot">
-              输入 [[ 可补全引用任意 wiki 页面；保存后自动带 frontmatter 入库、提交 git。
-            </div>
+
+            {tab === 'notes' && (
+              <>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                  <button className="btn btn-sm btn-secondary" onClick={newNote} style={{ flex: 1 }}>+ 新建</button>
+                  <input
+                    className="input input-sm"
+                    style={{ flex: 1, minWidth: 0 }}
+                    placeholder="项目名（可空）"
+                    value={newProject}
+                    onChange={(e) => setNewProject(e.target.value)}
+                    title="填了项目名，新笔记会放进 notes/<项目>/ 子目录"
+                  />
+                </div>
+                <div className="doc-tree">
+                  {projects.length === 0 && (
+                    <div className="mono" style={{ color: 'var(--c-text-3)', padding: 8 }}>还没有笔记，点"新建"开始写。</div>
+                  )}
+                  {projects.map((g) => (
+                    <div key={g.name || '(默认)'}>
+                      <div className="doc-group-label">
+                        {g.name ? `📁 ${g.name}` : '📁 默认项目'} · {g.notes.length}
+                      </div>
+                      {g.notes.map((n) => (
+                        <div key={n.path} className={`note-row ${current?.path === n.path ? 'active' : ''}`}>
+                          <button className="note-item" onClick={() => openDoc({ ...n, kind: 'note' })}>
+                            <span className="note-title">
+                              {n.title}
+                              {n.archived && <span className="archived-tag">已归档</span>}
+                              {n.syncState === 'dirty' && <span className="sync-dot" title="有改动未同步到知识库">●</span>}
+                            </span>
+                            <span className="note-time">{n.updatedAt?.slice(0, 16).replace('T', ' ')}</span>
+                          </button>
+                          <span className="note-row-actions">
+                            <button className="icon-btn" title={n.archived ? '取消归档' : '归档'} onClick={() => toggleArchive(n)}>
+                              {n.archived ? '↩' : '📦'}
+                            </button>
+                            <button className="icon-btn" title="删除" onClick={() => removeNote(n)}>✕</button>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                <label className="show-archived">
+                  <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+                  显示已归档
+                </label>
+                <div className="notes-pane-foot">
+                  输入 [[ 可补全引用任意 wiki 页面；保存后自动带 frontmatter 入库、提交 git。
+                </div>
+              </>
+            )}
+
+            {tab === 'library' && (
+              <div className="doc-tree">
+                {libGroups.length === 0 && (
+                  <div className="mono" style={{ color: 'var(--c-text-3)', padding: 8 }}>库为空——先投喂素材或写笔记并同步。</div>
+                )}
+                {libGroups.map((g) => (
+                  <div key={g.dir}>
+                    <div className="doc-group-label">{g.dir}</div>
+                    {g.files.map((f) => (
+                      <button
+                        key={f.path}
+                        className={`note-item ${current?.path === f.path ? 'active' : ''}`}
+                        onClick={() => openDoc({ path: f.path, title: f.path.split('/').pop().replace(/\.md$/, ''), kind: f.kind })}
+                      >
+                        <span className="note-title">
+                          {f.path.split('/').pop().replace(/\.md$/, '')}
+                          {f.reviewed && <span className="reviewed-tag">✓</span>}
+                        </span>
+                        <span className="note-time">{f.kind}</span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+                <div className="notes-pane-foot">
+                  库页面（AI 生成 / 来源）同样可直接编辑；保存保留溯源 frontmatter，改完可「同步到知识库」让引擎局部维护关联页。
+                </div>
+              </div>
+            )}
           </div>
         )}
       </aside>
@@ -219,22 +390,86 @@ export default function Notes({ onOpenPage }) {
 
         {!current && (
           <div className="empty-state" style={{ margin: 'auto', border: 'none' }}>
-            从左侧选择一篇笔记，或新建一篇
+            从左侧选择一篇文档，或新建一篇笔记
           </div>
         )}
 
         {current && (
           <div className="editor-wrap">
             <div className="editor-toolbar">
-              <span className="filename">{current.path} {dirty && <span className="dirty-dot">● 未保存</span>}</span>
-              <button className="btn btn-sm btn-primary" onClick={save} disabled={saving || !dirty}>
-                {saving ? '保存中…' : '保存'}
-              </button>
+              <span className="filename">
+                {current.path} {dirty && <span className="dirty-dot">● 未保存</span>}
+                {isNote && badge && <span className={badge.cls}>{badge.text}</span>}
+                {isNote && noteMeta?.lastIngestedAt && (
+                  <span className="ingest-time">上次消化 {noteMeta.lastIngestedAt.slice(0, 16).replace('T', ' ')}</span>
+                )}
+              </span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {isNote && (
+                  <button className="btn btn-sm btn-secondary" onClick={syncToKb} disabled={syncing || stream.busy}>
+                    {syncing ? `同步中 ${stream.elapsed}s…` : noteMeta?.syncState === 'never' ? '⚙ 消化此笔记' : '⚙ 同步到知识库'}
+                  </button>
+                )}
+                {!isNote && (
+                  <button className="btn btn-sm btn-secondary" onClick={syncToKb} disabled={syncing || stream.busy}>
+                    {syncing ? `同步中 ${stream.elapsed}s…` : '⚙ 同步到知识库'}
+                  </button>
+                )}
+                <button className="btn btn-sm btn-primary" onClick={save} disabled={saving || !dirty}>
+                  {saving ? '保存中…' : '保存'}
+                </button>
+              </div>
             </div>
             <div className="editor-host" ref={hostRef} />
             {message && <div className="banner banner-success" style={{ margin: 0, borderRadius: 0 }}>{message}</div>}
+            {syncing && stream.stage && (
+              <div className="sync-stage-bar">
+                <span className="spinner" />
+                <span className="mono">{stream.stage.text} · 已耗时 {stream.elapsed}s</span>
+              </div>
+            )}
+            {syncing && slow && (
+              <div className="banner banner-warning" style={{ margin: 0, borderRadius: 0 }}>
+                已耗时 {stream.elapsed}s：LLM 管道受 RPM 限流与 429 退避重试影响，耗时数分钟属正常范围。
+              </div>
+            )}
+            {syncResult && (
+              <div className="sync-result" style={{ margin: 0, borderRadius: 0 }}>
+                <div className="banner banner-success">
+                  同步完成（{syncResult.kind === 'note-ingest' ? '笔记已消化' : syncResult.kind === 'source-reingest' ? '来源已重新消化' : '知识图谱已局部维护'}）
+                  {syncResult.kind === 'wiki-maintain' && syncResult.summary ? `：${syncResult.summary}` : ''}
+                </div>
+                {syncResult.kind === 'wiki-maintain' ? (
+                  <>
+                    {syncResult.updatedPages?.length > 0 && (
+                      <div className="mono sync-detail">
+                        联动更新：{syncResult.updatedPages.join('、')}
+                      </div>
+                    )}
+                    {syncResult.updatedPages?.length === 0 && (
+                      <div className="mono sync-detail">周边页面无需更新。</div>
+                    )}
+                  </>
+                ) : (
+                  syncResult.writtenPages?.length > 0 && (
+                    <div className="mono sync-detail">
+                      产出 {syncResult.writtenPages.length} 页{syncResult.snapshotPath ? ` · 来源快照 ${syncResult.snapshotPath}` : ''}
+                    </div>
+                  )
+                )}
+                {syncResult.skipped && <div className="mono sync-detail">内容未变化，引擎幂等跳过。</div>}
+                {syncResult.rejections?.length > 0 && (
+                  <div className="mono sync-detail warn">闸门拒绝 {syncResult.rejections.length} 条提案</div>
+                )}
+              </div>
+            )}
           </div>
         )}
+
+        {/* 流式详情（第 2 条）：同步期间/结束后可回看 LLM 实时输出 */}
+        <div className="notes-workbench">
+          <EngineWorkbench stream={stream} active={syncing} />
+        </div>
 
         {graphPages.length === 0 && current && (
           <div className="mono" style={{ color: 'var(--c-text-3)', padding: '8px 24px' }}>
