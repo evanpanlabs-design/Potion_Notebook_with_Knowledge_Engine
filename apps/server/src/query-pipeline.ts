@@ -216,6 +216,23 @@ export async function buildGraphData(kbRoot: string): Promise<{ nodes: Array<{ i
   for (const [from, outs] of graph) {
     for (const to of outs) edges.push({ source: from, target: to })
   }
+  // D12-13 修复：笔记节点入图（SPEC 第 8 步：图谱里看到笔记与 wiki 的连接）
+  // title/alias → 页面路径 索引（notes 的 [[链接]] 落到 wiki 页上）
+  const snap = await scanKb(kbRoot)
+  const titleIndex = new Map<string, string>()
+  for (const p of pages) {
+    titleIndex.set(p.title.toLowerCase(), p.path)
+    for (const a of p.aliases) titleIndex.set(a.toLowerCase(), p.path)
+  }
+  for (const noteRel of snap.notes) {
+    const text = await readFile(path.join(kbRoot, noteRel), 'utf8')
+    const { fm, body } = parsePage(text)
+    nodes.push({ id: noteRel, title: (fm['title'] as string) ?? noteRel.replace(/^notes\//, '').replace(/\.md$/, ''), kind: 'note' })
+    for (const m of body.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g)) {
+      const target = titleIndex.get(m[1]!.trim().toLowerCase())
+      if (target) edges.push({ source: noteRel, target })
+    }
+  }
   return { nodes, edges }
 }
 

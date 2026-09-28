@@ -111,6 +111,12 @@ export default function App() {
 
   const openPage = useCallback((p) => setPagePath(p), [])
 
+  /** D12-13 修复：笔记有未保存修改时，切视图先 confirm（防内容静默丢失） */
+  const switchView = useCallback((v) => {
+    if (window.__potionNoteDirty && !window.confirm('笔记有未保存的修改，离开将丢失。仍要离开？')) return
+    setView(v)
+  }, [])
+
   const closeDrawer = useCallback((replaceWith) => {
     if (typeof replaceWith === 'string') {
       setPagePath(replaceWith) // 抽屉内跳转
@@ -135,7 +141,7 @@ export default function App() {
             <button
               key={n.id}
               className={`nav-item ${view === n.id ? 'active' : ''}`}
-              onClick={() => setView(n.id)}
+              onClick={() => switchView(n.id)}
             >
               <span className="nav-icon" aria-hidden>{n.icon}</span>
               <span className="nav-text">{n.label}</span>
@@ -145,8 +151,8 @@ export default function App() {
         <div className="sidebar-footer">local-first · v0.1</div>
       </nav>
       <main className="main">
-        {view === 'overview' && <Overview onOpenPage={openPage} go={setView} />}
-        {view === 'feed' && <Feed go={setView} onOpenPage={openPage} />}
+        {view === 'overview' && <Overview onOpenPage={openPage} go={switchView} />}
+        {view === 'feed' && <Feed go={switchView} onOpenPage={openPage} />}
         {view === 'ask' && <Ask onOpenPage={openPage} />}
         {view === 'notes' && <Notes onOpenPage={openPage} />}
         {view === 'graph' && <Graph onOpenPage={openPage} />}

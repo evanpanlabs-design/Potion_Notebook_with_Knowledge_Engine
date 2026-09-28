@@ -45,6 +45,22 @@ export default function Notes({ onOpenPage }) {
   const viewRef = useRef(null)
   const pagesRef = useRef([])
 
+  // D12-13 修复：dirty 状态广播到全局（App 切视图时 confirm 拦截）+ beforeunload 防误关
+  useEffect(() => {
+    window.__potionNoteDirty = dirty
+    const onBeforeUnload = (e) => {
+      if (dirty) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => {
+      window.__potionNoteDirty = false
+      window.removeEventListener('beforeunload', onBeforeUnload)
+    }
+  }, [dirty])
+
   const loadNotes = useCallback(async () => {
     try {
       const r = await api.notes()

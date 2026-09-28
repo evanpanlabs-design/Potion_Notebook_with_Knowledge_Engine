@@ -1,6 +1,8 @@
 import Fastify from 'fastify'
-import { readFile, writeFile, appendFile, mkdir, unlink } from 'node:fs/promises'
+import { readFile, writeFile, appendFile, mkdir, unlink, access } from 'node:fs/promises'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'node:events'
 import process from 'node:process'
 
@@ -19,12 +21,45 @@ import { answerQuery, buildGraphData } from './query-pipeline.ts'
  *   GET  /api/v1/pages/*path   只读页面
  */
 
-const KB_ROOT = process.env.KNOWLEDGE_BASE ?? path.resolve('data/my-wiki')
+const KB_ROOT = process.env.KNOWLEDGE_BASE ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..', 'data/my-wiki')
 const PORT = Number(process.env.PORT ?? 3100)
 
 const app = Fastify({ logger: false })
 /** 全局事件总线：SSE 层（后续接入 web）与缓存失效逻辑订阅 */
 export const bus = new EventEmitter()
+
+/** D12-13 修复：KB 必须自持 git 仓库（回滚是核心卖点，不能依赖用户手动 init）。
+ *  启动时若无 .git：git init → 补 local user（避免全局没配导致 commit 失败）→ initial commit */
+async function ensureKbGit(root: string): Promise<void> {
+  const run = (args: string[]) =>
+    new Promise<number>((resolve) => {
+      const p = spawn('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+      p.on('close', (code) => resolve(code ?? 1))
+    })
+  try {
+    await access(path.join(root, '.git'))
+    return
+  } catch { /* 无仓库，继续初始化 */ }
+  await run(['init', '-b', 'main'])
+  const { userName, userEmail } = { userName: process.env.GIT_AUTHOR_NAME, userEmail: process.env.GIT_AUTHOR_EMAIL }
+  if (userName && userEmail) {
+    await run(['config', 'user.name', userName])
+    await run(['config', 'user.email', userEmail])
+  } else {
+    // 全局通常已配置；为保险起见仅在该仓库缺 local config 且全局缺失时兜底
+    const hasGlobal = await new Promise<number>((resolve) => {
+      const p = spawn('git', ['config', '--global', 'user.email'], { stdio: ['ignore', 'pipe', 'pipe'] })
+      p.on('close', (code) => resolve(code ?? 1))
+    })
+    if (hasGlobal !== 0) {
+      await run(['config', 'user.name', 'Potion'])
+      await run(['config', 'user.email', 'potion@local'])
+    }
+  }
+  await run(['add', '-A'])
+  await run(['commit', '-m', 'chore: init knowledge base', '--allow-empty'])
+  console.log(`knowledge base git repo initialized at ${root}`)
+}
 
 function llmRouting() {
   const baseUrl = process.env.LLM_BASE_URL
@@ -264,6 +299,8 @@ app.get('/api/v1/pages/*', async (req, reply) => {
   }
 })
 
-app.listen({ port: PORT, host: '127.0.0.1' }).then(() => {
+app.listen({ port: PORT, host: '127.0.0.1' }).then(async () => {
+  await mkdir(KB_ROOT, { recursive: true })
+  await ensureKbGit(KB_ROOT)
   console.log(`knowledge-engine server listening on http://127.0.0.1:${PORT} (KB: ${KB_ROOT})`)
 })

@@ -11,7 +11,7 @@
   "scripts": {
     "test": "node --test packages/core/test/*.test.ts",
     "typecheck": "tsc -p packages/core --noEmit && tsc -p packages/agent-tools --noEmit && tsc -p apps/server --noEmit",
-    "start": "npm run dev --workspace apps/server",
+    "start": "npm run dev -w apps/server & npm run dev -w apps/web & wait",
     "spike:pi": "node --env-file-if-exists=.env spike/pi-smoke.ts"
   },
   "engines": {

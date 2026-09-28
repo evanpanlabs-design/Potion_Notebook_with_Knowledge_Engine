@@ -8,9 +8,10 @@ const KIND_COLORS = {
   concept: '#8b5cf6',
   source: '#6b7280',
   query: '#16a34a',
+  note: '#f59e0b',
   other: '#9ca3af',
 }
-const KIND_LABELS = { entity: '实体', concept: '概念', source: '来源', query: '问答', other: '其他' }
+const KIND_LABELS = { entity: '实体', concept: '概念', source: '来源', query: '问答', note: '笔记', other: '其他' }
 
 /** 路径式 title 美化：wiki/queries/xxx.md → xxx */
 function prettyTitle(t) {
