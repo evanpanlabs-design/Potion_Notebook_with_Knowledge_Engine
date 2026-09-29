@@ -20,7 +20,11 @@
     "marked": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "sigma": "^3.0.0"
+    "sigma": "^3.0.0",
+    "@milkdown/kit": "^7.22.2",
+    "@milkdown/react": "^7.22.2",
+    "micromark-extension-wiki-link": "^0.0.4",
+    "mdast-util-wiki-link": "^0.1.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.0",

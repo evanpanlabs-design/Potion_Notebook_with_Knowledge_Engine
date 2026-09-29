@@ -887,3 +887,112 @@ span.wikilink {
 .md-preview th, .md-preview td { border: 1px solid var(--c-border); padding: 6px 10px; font-size: 0.82rem; }
 .md-preview img { max-width: 100%; }
 .md-preview blockquote { border-left: 3px solid var(--c-border); margin: 0.6em 0; padding: 2px 12px; color: var(--c-text-3); }
+
+/* ================= Milkdown 所见即所得编辑器（feat/milkdown-editor） ================= */
+
+.milk-host {
+  overflow: auto;
+  background: var(--bg-1, #fff);
+}
+
+.milk-editor {
+  min-height: 320px;
+  outline: none;
+  font-size: 15px;
+  line-height: 1.75;
+  padding: 24px 32px 96px;
+}
+
+.milk-editor .ProseMirror-selectednode,
+.milk-editor [data-wikilink].ProseMirror-selectednode {
+  outline: 2px solid var(--c-primary, #3b82f6);
+  border-radius: 3px;
+}
+
+/* wikilink inline 节点（Milkdown） */
+.milk-editor span.wikilink {
+  color: var(--c-primary, #2563eb);
+  background: rgba(37, 99, 235, 0.08);
+  border-radius: 4px;
+  padding: 0 2px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.milk-editor span.wikilink:hover { background: #dbeafe; }
+.milk-editor span.wikilink .wl-edit {
+  display: none;
+  margin-left: 3px;
+  font-size: 11px;
+  opacity: 0.7;
+  font-weight: 400;
+}
+.milk-editor span.wikilink:hover .wl-edit { display: inline; }
+
+/* [[ 补全弹窗（z-index 高于抽屉） */
+.wl-suggest {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  max-width: 280px;
+  max-height: 264px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  padding: 4px;
+}
+.wl-suggest-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wl-suggest-item:hover, .wl-suggest-item.active {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--c-primary, #2563eb);
+}
+
+/* 编辑模式切换（富文本 ⇄ 源码） */
+.mode-switch {
+  display: inline-flex;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.mode-btn {
+  border: none;
+  background: #fff;
+  color: var(--c-text-2, #475569);
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+  line-height: 1;
+}
+.mode-btn + .mode-btn { border-left: 1px solid #e5e7eb; }
+.mode-btn.active {
+  background: var(--c-primary, #3b82f6);
+  color: #fff;
+}
+
+/* frontmatter 元信息面板 */
+.fm-panel {
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
+  padding: 10px 24px 12px;
+}
+.fm-panel-label {
+  font-size: 11px;
+  color: var(--c-text-3, #94a3b8);
+  margin-bottom: 6px;
+}
+.fm-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  line-height: 1.6;
+  background: #fff;
+}
