@@ -5,6 +5,8 @@ import { autocompletion } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { livePreview, wikilinkClickHandler } from '../cm-livepreview.js'
+import MilkdownEditor from '../milkdown/MilkdownEditor.jsx'
+import { loadForEditor, joinFrontmatter, saveFromEditor } from '../milkdown/serialize.js'
 import { api } from '../api.js'
 import { SLOW_HINT_SECONDS } from '../engine-stream.jsx'
 
@@ -63,8 +65,18 @@ export default function Notes({ onOpenPage, stream }) {
   const [error, setError] = useState('')
   const [paneCollapsed, setPaneCollapsed] = useState(false)
   const [newProject, setNewProject] = useState('') // 新建笔记时的项目输入
-  const hostRef = useRef(null)
-  const viewRef = useRef(null)
+  // ---- 编辑模式（feat/milkdown-editor）：'wysiwyg'（Milkdown）| 'source'（CM6 源码 fallback） ----
+  const [editMode, setEditMode] = useState(() => localStorage.getItem('ke.editMode') || 'wysiwyg')
+  const [fmText, setFmText] = useState(null) // frontmatter yaml 原文（不进编辑器，保存拼回）
+  const [fmPanelOpen, setFmPanelOpen] = useState(false)
+  const [editorInitial, setEditorInitial] = useState('') // Milkdown 装配初值（仅打开/切换文档时变，否则每次按键会重建编辑器）
+  const [editorMd, setEditorMd] = useState('') // Milkdown 实时序列化产物（listener 回调）
+  const savedRef = useRef('') // 已保存的完整落盘文本（dirty 判定基线）
+const wysInitRef = useRef(false) // wysiwyg 基线是否已随编辑器装配建立（remark 空行规范化会让首帧产物≠原文，需以首帧产物为基线，避免打开即误报 dirty）
+const wysPendingDirty = useRef(false) // 带改动切到 wysiwyg 时保持 dirty 标记（基线重建后由它恢复）
+const hostRef = useRef(null)
+const viewRef = useRef(null)
+const milkActionsRef = useRef(null) // Milkdown 命令句柄（插入表格等），由 MilkdownEditor 装配后填充
   const pagesRef = useRef([])
 
 
@@ -111,7 +123,14 @@ export default function Notes({ onOpenPage, stream }) {
       setCurrent(item)
       const text = p.content
       setSavedText(text)
+      savedRef.current = text
       setDoc(text)
+      const { fmText, body } = loadForEditor(text)
+      setFmText(fmText)
+      setEditorInitial(body)
+      setEditorMd('') // 清空：等编辑器 listener 首次序列化产物再建 dirty 基线（避免用原文当基线的假阳性）
+      wysInitRef.current = false
+      wysPendingDirty.current = false
       setDirty(false)
     } catch (e) {
       setError(e.message)
@@ -135,14 +154,65 @@ export default function Notes({ onOpenPage, stream }) {
     if (!name) return setError('无法分配新笔记文件名')
     setCurrent({ path: prefix + name, title: name.replace(/\.md$/, ''), kind: 'note' })
     setSavedText('')
+    savedRef.current = ''
     setDoc('')
+    setFmText(null)
+    setEditorInitial('')
+    setEditorMd('')
+    wysInitRef.current = false
+    wysPendingDirty.current = false
     setDirty(false)
     setPaneCollapsed(false)
   }
 
-  // 挂载/切换笔记时重建编辑器
+  /** 当前编辑内容 → 完整落盘文本（两模式统一出口） */
+  const composeContent = useCallback(() => {
+    if (editMode === 'wysiwyg') {
+      return joinFrontmatter(fmText, saveFromEditor(editorMd))
+    }
+    // 源码模式：编辑器全文（frontmatter 就在正文里，CM6 直编）
+    return viewRef.current?.state.doc.toString() ?? ''
+  }, [editMode, fmText, editorMd])
+
+  /** 组装当前编辑的正文（不含 fm），供 Milkdown 重建 / dirty 细化 */
+  const switchMode = useCallback(
+    (next) => {
+      if (next === editMode) return
+      if (dirty) {
+        // 带改动切换：先把当前内容带回另一模式
+        const content = composeContent()
+        setDoc(content)
+        const { fmText: fm, body } = loadForEditor(content)
+        setFmText(fm)
+        setEditorInitial(body)
+        setEditorMd('')
+        wysInitRef.current = false
+        wysPendingDirty.current = true
+      }
+      setEditMode(next)
+      localStorage.setItem('ke.editMode', next)
+    },
+    [editMode, dirty, composeContent],
+  )
+
+  // Milkdown 实时序列化 → dirty 判定。
+  // 首次产物用于建立基线（remark 对原文有空行规范化等 CommonMark 等价改写，
+  // 直接拿原文当基线会「打开即 dirty」）；空文档场景基线为 ''。
   useEffect(() => {
-    if (!hostRef.current || !current) return
+    if (editMode !== 'wysiwyg' || !current) return
+    if (!wysInitRef.current) {
+      if (editorMd === '') return // 编辑器 listener 尚未产出
+      wysInitRef.current = true
+      savedRef.current = editorInitial === '' ? '' : joinFrontmatter(fmText, saveFromEditor(editorMd))
+      setDirty(wysPendingDirty.current)
+      return
+    }
+    setDirty(joinFrontmatter(fmText, saveFromEditor(editorMd)) !== savedRef.current)
+  }, [editMode, editorMd, editorInitial, fmText, current])
+
+  // 挂载/切换笔记时重建 CM6 编辑器（仅源码模式）
+  useEffect(() => {
+    if (!hostRef.current || !current || editMode !== 'source') return
     const state = EditorState.create({
       doc: doc,
       extensions: [
@@ -171,18 +241,23 @@ export default function Notes({ onOpenPage, stream }) {
       viewRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.path])
+  }, [current?.path, editMode])
 
   const isNote = current?.kind === 'note'
   const noteMeta = isNote ? notes.find((n) => n.path === current?.path) : null
 
   async function save() {
     if (!current || saving) return
+    // 保险丝：富文本模式下编辑器未产出（重建中/异常）时保存会把空正文落盘（曾致正文清空事故）
+    if (editMode === 'wysiwyg' && editorMd === '' && editorInitial !== '') {
+      setError('编辑器尚未就绪（正在重建），请稍候 1 秒再保存')
+      return
+    }
     setSaving(true)
     setError('')
     setMessage('')
     try {
-      const text = viewRef.current.state.doc.toString()
+      const text = composeContent()
       let r
       if (isNote) {
         const relNoPrefix = current.path.replace(/^notes\//, '')
@@ -195,6 +270,8 @@ export default function Notes({ onOpenPage, stream }) {
         await loadLibrary()
       }
       setSavedText(text)
+      savedRef.current = text
+      setDoc(text) // 保存后同步 doc state：切源码模式时 CM6 重建要读最新全文（否则显示保存前旧内容）
       setDirty(false)
       setMessage(`已保存 · commit ${r.commitSha?.slice(0, 7) ?? '—'}`)
     } catch (e) {
@@ -265,6 +342,7 @@ export default function Notes({ onOpenPage, stream }) {
         setCurrent(null)
         setDoc('')
         setSavedText('')
+        savedRef.current = ''
       }
       await loadNotes()
     } catch (e) {
@@ -442,6 +520,44 @@ export default function Notes({ onOpenPage, stream }) {
                 )}
               </span>
               <div style={{ display: 'flex', gap: 8 }}>
+                <div className="mode-switch" title="切换编辑模式（改动会带入）">
+                  <button
+                    className={`mode-btn ${editMode === 'wysiwyg' ? 'active' : ''}`}
+                    onClick={() => switchMode('wysiwyg')}
+                    title="所见即所得（Milkdown）"
+                  >
+                    富文本
+                  </button>
+                  <button
+                    className={`mode-btn ${editMode === 'source' ? 'active' : ''}`}
+                    onClick={() => switchMode('source')}
+                    title="Markdown 源码（CodeMirror）"
+                  >
+                    源码
+                  </button>
+                </div>
+                {editMode === 'wysiwyg' && (
+                  <button
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => {
+                      if (!milkActionsRef.current?.insertTable?.()) {
+                        setMessage('编辑器尚未就绪，稍候再试')
+                      }
+                    }}
+                    title="在光标处插入 3×3 表格（GFM）"
+                  >
+                    表格
+                  </button>
+                )}
+                {editMode === 'wysiwyg' && fmText != null && (
+                  <button
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setFmPanelOpen(!fmPanelOpen)}
+                    title="查看/编辑页面元信息（frontmatter：溯源、时间戳等，保存时拼回）"
+                  >
+                    {fmPanelOpen ? '▾ 元信息' : '▸ 元信息'}
+                  </button>
+                )}
                 {isNote && (
                   <button className="btn btn-sm btn-secondary" onClick={syncToKb} disabled={syncing || stream.busy}>
                     {syncing ? `同步中 ${stream.elapsed}s…` : noteMeta?.syncState === 'never' ? '⚙ 消化此笔记' : '⚙ 同步到知识库'}
@@ -457,7 +573,30 @@ export default function Notes({ onOpenPage, stream }) {
                 </button>
               </div>
             </div>
-            <div className="editor-host" ref={hostRef} />
+            {editMode === 'wysiwyg' && fmPanelOpen && fmText != null && (
+              <div className="fm-panel">
+                <div className="fm-panel-label">frontmatter（高级元信息，谨慎修改 · 保存时拼回文件头）</div>
+                <textarea
+                  className="input mono"
+                  value={fmText}
+                  onChange={(e) => { setFmText(e.target.value); setDirty(true) }}
+                  rows={Math.min(12, fmText.split('\n').length + 1)}
+                  spellCheck={false}
+                />
+              </div>
+            )}
+            <div className="editor-host" style={{ display: editMode === 'wysiwyg' ? 'none' : 'block' }} ref={hostRef} />
+            {editMode === 'wysiwyg' ? (
+              <div className="editor-host milk-host">
+                <MilkdownEditor
+                  initial={editorInitial}
+                  pages={[...graphPages, ...notes.map((n) => ({ title: n.title }))].map((p) => ({ title: p.title }))}
+                  onOpenTitle={(path) => onOpenPage?.(path)}
+                  onMarkdown={setEditorMd}
+                  actionRef={milkActionsRef}
+                />
+              </div>
+            ) : null}
             {message && <div className="banner banner-success" style={{ margin: 0, borderRadius: 0 }}>{message}</div>}
             {syncing && stream.stage && (
               <div className="sync-stage-bar">
