@@ -4,7 +4,7 @@
 
 Potion 是一个**本地优先**的知识管理应用：把文章、笔记、想法投喂给引擎，两段式 LLM 管道会将素材消化成互相链接的 Wiki 页面（实体 / 概念 / 来源摘要）；你随时用自己的笔记（Note）与这套 Wiki 双向链接。所有产物都是纯 Markdown 文件 + git 版本管理 —— **知识库永远属于你，随时可以用 Obsidian 打开**。
 
-![总览](docs/demo/screenshots/v02-overview.png)
+![总览](docs/demo/screenshots/v026-overview.png)
 
 ## 演示
 
@@ -39,24 +39,31 @@ LLM_MODEL_INGEST=gpt-4o-mini    # 摄取用（可选）
 LLM_MODEL_QUERY=gpt-4o          # 问答用（可选）
 ```
 
-![LLM 双引擎设置页](docs/demo/screenshots/v02-settings.png)
+![LLM 双引擎设置页](docs/demo/screenshots/v026-settings.png)
 
 ## 功能
 
 | 模块 | 说明 |
 |---|---|
 | 文档工作台 | 我的笔记（项目分层）与库页面（wiki/sources）双 tab，全部文档可查看编辑；每篇笔记带消化状态徽标（未消化 / 已同步 / 有改动未同步），一键「同步到知识库」触发消化或局部维护 |
-| 投喂素材 | 粘贴 Markdown/文本 → 两段式消化（分析 → 生成）→ 闸门校验 → 落盘；LLM 实时输出全程可视化 |
-| 提问 | 级联检索（词法 + 图扩展）→ 生成带引用的回答；无依据时明说，不编造；回答后可展开**关联知识图谱**局部子图 |
+| 素材页 | ingest 管线的输入层：上传 PDF/图片经 [MinerU 精准解析](https://mineru.net)转为结构化 Markdown 自动入库；导入 .md/.txt 则直接落盘并立即两段式消化；左侧任务与文件列表、右侧内容预览 |
+| 提问 | 悬浮球随手问（任意页面右下角），级联检索（词法 + 图扩展）→ 生成带引用的回答并标注相关度；无依据时明说，不编造；回答后可展开**关联知识图谱**局部子图并可导出图片 |
+| 问答历史 | 与知识库的全部问答记录（新在前），回答带引用标注与局部图谱；记录保留 30 天后自动遗忘，避免一次性问答沉淀为永久知识 |
 | 审核 | AI 生成页默认待审：通过 / 驳回删除 / **💬 返修附意见**；返修池支持「⚙ 统一修复」批量执行，运行期间新意见自动暂缓进池 |
-| 知识图谱 | 实体 / 概念 / 笔记 / 问答的 wikilink 关系网络，支持缩放平移与布局参数调节 |
+| 知识图谱 | 实体 / 概念 / 笔记 / 问答的 wikilink 关系网络，支持缩放平移与布局参数调节，点击节点侧栏查看页面内容与反向链接 |
 | 总览 | 库状态、`log.md` 操作流水时间线（ingest / query / edit / sync / rework…）、index 目录 |
 
-![文档工作台：笔记编辑 + 消化状态](docs/demo/screenshots/v02-notes-editor.png)
+![文档工作台：笔记编辑 + 消化状态](docs/demo/screenshots/v026-notes-editor.png)
 
 笔记的消化状态由 frontmatter 元数据（`ingested_sha256` / `last_ingested_at`）驱动：编辑保存后自动变「有改动未同步」，点「⚙ 同步到知识库」消化后回到「已同步」——你永远知道哪些改动还没进引擎。
 
-![提问后展开关联知识图谱局部子图](docs/demo/screenshots/ask-subgraph.png)
+![素材页：MinerU 解析任务 + 素材文件 + 内容预览](docs/demo/screenshots/v026-sources.png)
+
+![悬浮球问答：带相关度的引用标注](docs/demo/screenshots/v026-ask-orb.png)
+
+![问答历史：引用标注 + 30 天自动遗忘](docs/demo/screenshots/v026-ask-history.png)
+
+![提问后展开关联知识图谱局部子图（一跳邻居，可导出图片）](docs/demo/screenshots/v026-ask-orb-subgraph.png)
 
 ## 架构
 
@@ -80,7 +87,7 @@ LLM_MODEL_QUERY=gpt-4o          # 问答用（可选）
 
 两段式 ingest（ARCHITECTURE §6.2）：**Phase 1 analyze** 将素材分析为结构化 JSON（实体 / 概念 / claims，带出处 locus）→ **Phase 2 generate** 逐页生成结构化正文（实体页：概述/关键事实/关系网络/来源；概念页：定义/机制/相关概念/常见误区）→ **闸门校验链**（命名 / 重复 / 标签词表 / 路径越界）→ 落盘 → git 提交。闸门是唯一写通道，AI 没有绕过它的路径。
 
-![知识图谱：27 节点 wikilink 网络](docs/demo/screenshots/v02-graph.png)
+![知识图谱：wikilink 网络 + 节点侧栏（内容 / 反向链接）](docs/demo/screenshots/v026-graph.png)
 
 ## 工程实践
 
@@ -91,7 +98,7 @@ LLM_MODEL_QUERY=gpt-4o          # 问答用（可选）
 - **审计**：`log.md` 记录每次 ingest/query/note/edit/sync/review/rework，前端时间线可视化
 - **SSE 显化**：LLM 流式 token、管道阶段、耗时指标经 `/api/events` 实时推送，无黑盒等待
 
-![审核：三处置 + 返修意见](docs/demo/screenshots/v02-review.png)
+![审核：三处置 + 返修意见](docs/demo/screenshots/v026-review.png)
 
 ## 文档
 
