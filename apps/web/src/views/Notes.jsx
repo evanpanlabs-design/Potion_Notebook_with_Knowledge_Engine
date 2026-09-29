@@ -67,29 +67,6 @@ export default function Notes({ onOpenPage, stream }) {
   const viewRef = useRef(null)
   const pagesRef = useRef([])
 
-  // ---- 导入素材（v0.2.1 收编原投喂页；v0.2.2 改为文件选择，仅 .md/.txt）----
-  const [importOpen, setImportOpen] = useState(false)
-  const [importFile, setImportFile] = useState(null) // { name, size, content }
-  const [importBusy, setImportBusy] = useState(false)
-  const [importError, setImportError] = useState('')
-  const [importResult, setImportResult] = useState(null)
-  const fileInputRef = useRef(null)
-  const [dragOver, setDragOver] = useState(false)
-
-  async function acceptImportFile(file) {
-    if (!file) return
-    if (!/\.(md|txt)$/i.test(file.name)) {
-      setImportError('仅支持 .md / .txt 文件')
-      return
-    }
-    setImportError('')
-    try {
-      const text = await file.text()
-      setImportFile({ name: file.name, size: file.size, content: text })
-    } catch (e) {
-      setImportError(`读取文件失败：${e.message}`)
-    }
-  }
 
   const loadNotes = useCallback(async () => {
     try {
@@ -259,38 +236,6 @@ export default function Notes({ onOpenPage, stream }) {
     }
   }
 
-  /** 导入素材并消化：文件落盘 sources/ → 两段式 ingest（幂等），流式过程由全局引擎浮层展示 */
-  async function submitImport() {
-    if (!importFile || importBusy || stream.busy || syncing) return
-    setImportError('')
-    setImportBusy(true)
-    setImportResult(null)
-    stream.begin()
-    try {
-      // 文件名里的空格换成连字符（server 端 filename 白名单不含空格）
-      const safeName = importFile.name.replace(/\s+/g, '-')
-      await api.addSource(safeName, importFile.content)
-      const outcome = await api.ingest(`sources/${safeName}`)
-      setImportResult(outcome)
-      await loadLibrary()
-      await loadNotes()
-    } catch (e) {
-      setImportError(e.message)
-    } finally {
-      stream.end()
-      setImportBusy(false)
-    }
-  }
-
-  function closeImport() {
-    if (importBusy) return
-    setImportOpen(false)
-    setImportFile(null)
-    setImportError('')
-    setImportResult(null)
-    setDragOver(false)
-  }
-
   /** 重命名笔记：同目录内改文件名（分组不变）；若 title 就是旧文件名则同步更新。
    *  打开中的笔记同步更新路径，编辑器内容保留。 */
   async function renameNote(note) {
@@ -384,7 +329,6 @@ export default function Notes({ onOpenPage, stream }) {
               <>
                 <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
                   <button className="btn btn-sm btn-secondary" onClick={newNote} style={{ flex: 1 }}>+ 新建笔记</button>
-                  <button className="btn btn-sm btn-secondary" onClick={() => setImportOpen(true)} style={{ flex: 1 }} title="把一份材料（文章/文档）喂给引擎两段式消化">⇪ 导入素材</button>
                 </div>
                 <input
                   className="input input-sm"
@@ -397,7 +341,7 @@ export default function Notes({ onOpenPage, stream }) {
                 <div className="doc-tree">
                   {projects.length === 0 && (
                     <div className="mono" style={{ color: 'var(--c-text-3)', padding: 8, lineHeight: 1.7 }}>
-                      写笔记或「导入素材」，引擎会自动消化进知识库，随时到「审核」页把关。
+                      写笔记，或到「素材」页导入材料，引擎会自动消化进知识库，随时到「审核」页把关。
                     </div>
                   )}
                   {projects.map((g) => (
@@ -449,7 +393,7 @@ export default function Notes({ onOpenPage, stream }) {
             {tab === 'library' && (
               <div className="doc-tree">
                 {libGroups.length === 0 && (
-                  <div className="mono" style={{ color: 'var(--c-text-3)', padding: 8 }}>库为空——先投喂素材或写笔记并同步。</div>
+                  <div className="mono" style={{ color: 'var(--c-text-3)', padding: 8 }}>库为空——先写笔记或到「素材」页导入并同步。</div>
                 )}
                 {libGroups.map((g) => (
                   <div key={g.dir}>
@@ -566,100 +510,6 @@ export default function Notes({ onOpenPage, stream }) {
         )}
       </section>
 
-      {/* 导入素材弹窗（收编原投喂页）：实时输出看侧栏状态灯点开的引擎浮层 */}
-      {importOpen && (
-        <div className="drawer-mask" onClick={closeImport}>
-          <aside className="import-dialog" role="dialog" aria-label="导入素材" onClick={(e) => e.stopPropagation()}>
-            <div className="drawer-head">
-              <h2 className="drawer-title">⇪ 导入素材</h2>
-              <button className="drawer-close" onClick={closeImport} aria-label="关闭" disabled={importBusy}>✕</button>
-            </div>
-            <div className="import-dialog-body">
-              <p className="page-desc" style={{ marginTop: 0 }}>
-                选择一份 .md / .txt 材料文件（点击或拖入），引擎会两段式消化：先分析要点，再生成结构化 wiki 页面，全程可溯源，产出进入审核队列。
-              </p>
-              {importError && <div className="banner banner-danger">导入失败：{importError}</div>}
-              {importResult ? (
-                <div className="card" style={{ margin: 0 }}>
-                  <div className="banner banner-success" style={{ margin: 0 }}>
-                    消化完成：产出 {importResult.writtenPages.length} 个页面，git 提交 {importResult.commitSha?.slice(0, 7) ?? '未提交'}。
-                    {importResult.rejections?.length > 0 && ` 另有 ${importResult.rejections.length} 条产出被闸门拒绝。`}
-                  </div>
-                  <div className="page-link-list" style={{ marginTop: 12 }}>
-                    {importResult.writtenPages.map((path) => (
-                      <div key={path} className="page-link" onClick={() => { closeImport(); onOpenPage?.(path) }}>
-                        <span className="kind-badge kind-note">NEW</span>
-                        <strong style={{ fontWeight: 600 }}>{path.split('/').pop().replace(/\.md$/, '')}</strong>
-                        <span className="path">{path}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
-                    <button className="btn btn-primary" onClick={closeImport}>完成</button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div
-                    className={`file-drop ${dragOver ? 'over' : ''}`}
-                    onClick={() => fileInputRef.current?.click()}
-                    onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-                    onDragLeave={() => setDragOver(false)}
-                    onDrop={(e) => { e.preventDefault(); setDragOver(false); acceptImportFile(e.dataTransfer.files?.[0]) }}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInputRef.current?.click() } }}
-                  >
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".md,.txt"
-                      style={{ display: 'none' }}
-                      onChange={(e) => { acceptImportFile(e.target.files?.[0]); e.target.value = '' }}
-                    />
-                    {importFile ? (
-                      <div className="file-chip" onClick={(e) => e.stopPropagation()}>
-                        <strong>{importFile.name}</strong>
-                        <span className="mono file-chip-meta">
-                          {(importFile.size / 1024).toFixed(1)} KB · {importFile.content.length} 字符
-                        </span>
-                        <button
-                          className="btn btn-sm btn-secondary"
-                          disabled={importBusy}
-                          onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click() }}
-                        >
-                          重新选择
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        <div style={{ fontSize: 28, lineHeight: 1 }}>📄</div>
-                        <div style={{ marginTop: 8, fontWeight: 600 }}>点击选择文件，或拖拽到此处</div>
-                        <div className="file-drop-hint">仅支持 Markdown（.md）与纯文本（.txt）</div>
-                      </>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 14 }}>
-                    <button
-                      className="btn btn-primary"
-                      disabled={!importFile || importBusy}
-                      onClick={submitImport}
-                    >
-                      {importBusy && <span className="spinner" style={{ borderTopColor: '#fff', borderColor: 'rgba(255,255,255,0.35)' }} />}
-                      {importBusy ? `引擎消化中 ${stream.elapsed}s…` : '导入并消化'}
-                    </button>
-                    {importBusy && (
-                      <span className="mono" style={{ color: 'var(--c-text-3)', fontSize: '0.75rem' }}>
-                        {stream.stage?.text ?? '排队中…'}（实时输出见侧栏引擎状态灯）
-                      </span>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </aside>
-        </div>
-      )}
     </div>
   )
 }

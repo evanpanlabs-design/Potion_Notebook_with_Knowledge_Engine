@@ -29,7 +29,7 @@ export default function Overview({ onOpenPage, go }) {
   }, [])
 
   return (
-    <div className="page">
+    <div className="page page-wide">
       <h1 className="page-title">总览</h1>
       <p className="page-desc">你的知识库当前状态与目录。</p>
 
@@ -40,9 +40,12 @@ export default function Overview({ onOpenPage, go }) {
           <div className="stat-value">{status ? status.pages : '—'}</div>
           <div className="stat-label">Wiki 页面</div>
         </div>
-        <div className="stat-card tint-secondary">
+        <div
+          className="stat-card tint-secondary"
+          title="sources/ 目录下的原始文件数：早期导入的素材 + 每篇笔记「同步到知识库」时生成的不可变快照（sources/note-*.md）。它们是 ingest 管线的输入层。"
+        >
           <div className="stat-value">{status ? status.sources : '—'}</div>
-          <div className="stat-label">投喂素材</div>
+          <div className="stat-label">原始素材</div>
         </div>
         <div className="stat-card tint-success">
           <div className="stat-value">{status ? status.reviewed : '—'}</div>

@@ -7,7 +7,12 @@
     "dev": "node --env-file-if-exists=../../.env src/index.ts"
   },
   "dependencies": {
+    "@fastify/multipart": "10.1.2",
     "@ke/core": "*",
+    "adm-zip": "0.6.1",
     "fastify": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "0.5.8"
   }
 }

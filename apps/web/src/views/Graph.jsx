@@ -1,15 +1,32 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Graph from 'graphology'
 import forceAtlas2 from 'graphology-layout-forceatlas2'
+import louvain from 'graphology-communities-louvain'
 import { api } from '../api.js'
 import { exportSvgToPng } from '../export-svg.js'
 
-const KIND_COLORS = {
-  entity: '#3b82f6',
-  concept: '#8b5cf6',
-  source: '#6b7280',
-  note: '#f59e0b',
-  other: '#9ca3af',
+/** v0.2.5 配色方案：kinds = 页面类型色，communities = Louvain 聚类调色盘（12 色），active = hover 邻接边高亮色 */
+const SCHEMES = {
+  classic: {
+    label: '经典蓝紫',
+    kinds: { entity: '#3b82f6', concept: '#8b5cf6', source: '#6b7280', note: '#f59e0b', other: '#9ca3af' },
+    communities: ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4', '#f97316', '#84cc16', '#ec4899', '#14b8a6', '#a855f7', '#64748b'],
+  },
+  forest: {
+    label: '森林',
+    kinds: { entity: '#059669', concept: '#65a30d', source: '#78716c', note: '#d97706', other: '#a8a29e' },
+    communities: ['#059669', '#65a30d', '#0d9488', '#ca8a04', '#4d7c0f', '#0f766e', '#a16207', '#16a34a', '#b45309', '#15803d', '#854d0e', '#44403c'],
+  },
+  warm: {
+    label: '暖调',
+    kinds: { entity: '#ea580c', concept: '#e11d48', source: '#78716c', note: '#f59e0b', other: '#a8a29e' },
+    communities: ['#ea580c', '#e11d48', '#d97706', '#db2777', '#dc2626', '#f97316', '#be123c', '#f59e0b', '#f43f5e', '#c2410c', '#fb7185', '#a8a29e'],
+  },
+  cool: {
+    label: '冷调',
+    kinds: { entity: '#0284c7', concept: '#4f46e5', source: '#64748b', note: '#0891b2', other: '#94a3b8' },
+    communities: ['#0284c7', '#4f46e5', '#0891b2', '#7c3aed', '#1d4ed8', '#0e7490', '#6d28d9', '#2563eb', '#155e75', '#5b21b6', '#38bdf8', '#64748b'],
+  },
 }
 const KIND_LABELS = { entity: '实体', concept: '概念', source: '来源', note: '笔记', other: '其他' }
 
@@ -17,6 +34,9 @@ const KIND_LABELS = { entity: '实体', concept: '概念', source: '来源', not
 function prettyTitle(t) {
   return t.includes('/') ? t.split('/').pop().replace(/\.md$/, '') : t
 }
+
+/** 位置缓存（llm_wiki 同款思路）：数据变了才重排，数据没变时用上次坐标做初始位置，布局不跳 */
+const posCache = new Map()
 
 const W = 900
 const H = 560
@@ -39,9 +59,15 @@ export default function GraphView({ onOpenPage }) {
   const [legendOpen, setLegendOpen] = useState(true) // 图例可折叠（默认展开）
   const [tuneOpen, setTuneOpen] = useState(false) // 微调面板可折叠（默认收起，基准参数已调好）
   const [showSources, setShowSources] = useState(false) // 来源节点默认不渲染
-  // v0.2.2 基准下调：节点半径基准缩到原 70%（6→4.2，大小差异同步 2.5→1.75），
-  // 引力聚拢加倍（4→8，滑块上限同步提高到 16），留出上下微调空间
-  const [cfg, setCfg] = useState({ nodeBase: 4.2, nodeScale: 1.75, edgeWidth: 1, repulsion: 20, gravity: 8 })
+  // 配色：方案 + 着色模式（按页面类型 / 按 Louvain 聚类），均持久化到 localStorage
+  const [schemeKey, setSchemeKey] = useState(() => localStorage.getItem('potion-graph-scheme') || 'classic')
+  const [colorMode, setColorMode] = useState(() => localStorage.getItem('potion-graph-mode') || 'kind')
+  const scheme = SCHEMES[schemeKey] ?? SCHEMES.classic
+  useEffect(() => { localStorage.setItem('potion-graph-scheme', schemeKey) }, [schemeKey])
+  useEffect(() => { localStorage.setItem('potion-graph-mode', colorMode) }, [colorMode])
+  // v0.2.4 布局重调：FA2 开 preventOverlap + inferSettings，引力降到 3（strongGravityMode）。
+  // 之前的病因：gravity 8 把每个连通分量压成致密球，scalingRatio 20 又把球间推得很远 →「分散 + 糊团」。
+  const [cfg, setCfg] = useState({ nodeBase: 4.2, nodeScale: 1.75, edgeWidth: 1, repulsion: 10, gravity: 3 })
   const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
 
   const svgRef = useRef(null)
@@ -76,14 +102,45 @@ export default function GraphView({ onOpenPage }) {
     }
     return d
   }, [edges])
+  const maxDeg = useMemo(() => Math.max(1, ...Object.values(deg)), [deg])
 
-  // 布局：graphology 建 + FA2 力导向 → 归一化到画布坐标（斥力参数改变时实时重排）
+  /** 邻接表：hover 聚焦时用于「保留邻居、淡出无关」 */
+  const neighborsOf = useMemo(() => {
+    const m = {}
+    for (const e of edges) {
+      ;(m[e.source] ??= new Set()).add(e.target)
+      ;(m[e.target] ??= new Set()).add(e.source)
+    }
+    return m
+  }, [edges])
+
+  /** √ 度数缩放半径（llm_wiki 同款思路）：枢纽节点不线性膨胀，给团内留出空间 */
+  const radius = (id) => cfg.nodeBase + Math.sqrt(deg[id] ?? 0) * cfg.nodeScale * 1.6
+
+  /** 确定性初始位置：id hash → 伪随机坐标（刷新布局不跳变，FA2 收敛结果可复现）；优先用上次缓存坐标 */
+  function hashXY(id) {
+    const cached = posCache.get(id)
+    if (cached) return cached
+    let h = 2166136261
+    for (let i = 0; i < id.length; i++) {
+      h ^= id.charCodeAt(i)
+      h = Math.imul(h, 16777619)
+    }
+    const u = (h >>> 0) % 100000 / 100000
+    const v = (Math.imul(h, 2654435761) >>> 0) % 100000 / 100000
+    return { x: u * 400 - 200, y: v * 400 - 200 }
+  }
+
+  // 布局：graphology 建 + FA2 力导向 → 归一化到画布坐标（斥力参数改变时实时重排）。
+  // v0.2.4：inferSettings 自动推导基准参数；gravity 1 + strongGravityMode（llm_wiki 同款），
+  // preventOverlap + 节点 size 参与布局 → 团内节点不再叠成一球。
   const layout = useMemo(() => {
     if (!nodes.length) return null
     const g = new Graph({ multi: false })
     for (const n of nodes) {
-      // FA2 要求节点必须有初始 x/y（否则 NaN 传染整个布局）
-      g.addNode(n.id, { x: Math.random() * 100 - 50, y: Math.random() * 100 - 50 })
+      // FA2 要求节点必须有初始 x/y（确定性 hash，避免每次随机导致布局跳变）
+      const { x, y } = hashXY(n.id)
+      g.addNode(n.id, { x, y, size: radius(n.id) })
     }
     for (const e of edges) {
       if (g.hasNode(e.source) && g.hasNode(e.target) && !g.hasEdge(e.source, e.target)) {
@@ -91,9 +148,19 @@ export default function GraphView({ onOpenPage }) {
       }
     }
     if (g.order > 1) {
+      const base = forceAtlas2.inferSettings(g)
       forceAtlas2.assign(g, {
         iterations: 300,
-        settings: { gravity: cfg.gravity, scalingRatio: cfg.repulsion, barnesHutOptimize: true, slowDown: 5 },
+        settings: {
+          ...base,
+          gravity: cfg.gravity,
+          strongGravityMode: true,
+          scalingRatio: cfg.repulsion,
+          barnesHutOptimize: nodes.length > 50,
+          preventOverlap: true,
+          edgeWeightInfluence: 0,
+          slowDown: 10,
+        },
       })
     }
     // 孤立节点摊在圆环上
@@ -108,6 +175,9 @@ export default function GraphView({ onOpenPage }) {
       g.setNodeAttribute(n.id, 'x', Math.cos(angle) * 50)
       g.setNodeAttribute(n.id, 'y', Math.sin(angle) * 50)
     })
+
+    // 布局结果写回位置缓存：下次重排（数据变化/参数微调）从上次位置继续，而不是重新随机
+    for (const n of nodes) posCache.set(n.id, { x: g.getNodeAttribute(n.id, 'x'), y: g.getNodeAttribute(n.id, 'y') })
 
     // 归一化
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
@@ -129,7 +199,64 @@ export default function GraphView({ onOpenPage }) {
       }
     }
     return pos
-  }, [nodes, edges, cfg.repulsion, cfg.gravity])
+  }, [nodes, edges, cfg.repulsion, cfg.gravity, cfg.nodeBase, cfg.nodeScale])
+
+  /** Louvain 社区检测（llm_wiki 同款）：按 wikilink 拓扑自动聚类，仅「按聚类」着色时计算。
+   *  与布局 memo 分离：微调滑杆重排时社区划分不变，颜色稳定。 */
+  const communityOf = useMemo(() => {
+    if (colorMode !== 'community' || !nodes.length) return null
+    const g = new Graph({ multi: false })
+    for (const n of nodes) g.addNode(n.id)
+    for (const e of edges) {
+      if (g.hasNode(e.source) && g.hasNode(e.target) && !g.hasEdge(e.source, e.target)) {
+        g.addEdge(e.source, e.target)
+      }
+    }
+    if (g.size > 0) louvain.assign(g)
+    const m = {}
+    for (const n of nodes) m[n.id] = g.getNodeAttribute(n.id, 'community') ?? 0
+    return m
+  }, [nodes, edges, colorMode])
+
+  /** 节点颜色：按类型 → scheme.kinds；按聚类 → scheme.communities[社区号 % 12] */
+  const nodeColor = (n) => {
+    if (communityOf) return scheme.communities[(communityOf[n.id] ?? 0) % scheme.communities.length]
+    return scheme.kinds[n.kind] ?? scheme.kinds.other
+  }
+
+  /** 聚类分组（图例用）：社区号 → { count, 代表节点 }，按成员数降序 */
+  const communityGroups = useMemo(() => {
+    if (!communityOf) return null
+    const groups = {}
+    for (const n of nodes) (groups[communityOf[n.id]] ??= []).push(n)
+    return Object.entries(groups)
+      .map(([c, ns]) => ({
+        c: Number(c),
+        count: ns.length,
+        rep: [...ns].sort((a, b) => (deg[b.id] ?? 0) - (deg[a.id] ?? 0))[0],
+      }))
+      .sort((a, b) => b.count - a.count)
+  }, [communityOf, nodes, deg])
+
+  // ---- 标签避让：按度数降序贪心保留放得下的标签，hover 节点必显（llm_wiki labelThreshold 思路的 SVG 版） ----
+  const shownLabels = useMemo(() => {
+    if (!layout) return new Set()
+    const kept = []
+    const boxes = []
+    const order = [...nodes].sort((a, b) => (deg[b.id] ?? 0) - (deg[a.id] ?? 0))
+    for (const n of order) {
+      const p = layout[n.id]
+      if (!p) continue
+      const r = radius(n.id)
+      const title = prettyTitle(n.title)
+      const w = title.length * 12 + 10 // CJK 字符 ≈ 12px（fontSize 11.5）
+      const box = { x0: p.x - w / 2, x1: p.x + w / 2, y0: p.y + r + 3, y1: p.y + r + 22 }
+      if (boxes.some((b) => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0)) continue
+      boxes.push(box)
+      kept.push(n.id)
+    }
+    return new Set(kept)
+  }, [layout, nodes, deg, cfg])
 
   // ---- 滚轮缩放：以指针位置为锚点（native listener，非 passive 才能 preventDefault）。
   // 依赖 graph：svg 在数据加载后才渲染，必须等 ref 挂载后再绑监听，否则滚轮会穿透为页面滚动。 ----
@@ -180,7 +307,7 @@ export default function GraphView({ onOpenPage }) {
   const upd = (k) => (e) => setCfg((c) => ({ ...c, [k]: Number(e.target.value) }))
 
   return (
-    <div className="page page-wide">
+    <div className="page page-wide page-full">
       <h1 className="page-title">知识图谱</h1>
       <p className="page-desc">
         wiki 页面之间的 wikilink 关系网络。滚轮缩放 · 拖拽平移 · 点击节点查看页面内容。
@@ -265,29 +392,33 @@ export default function GraphView({ onOpenPage }) {
                   const b = layout[e.target]
                   if (!a || !b) return null
                   const active = hover && (hover === e.source || hover === e.target)
+                  // hover 聚焦：非邻接边淡出，邻接边高亮（llm_wiki edgeReducer 思路）
+                  const dimmed = hover && !active
                   return (
                     <line
                       key={i}
                       x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                      stroke={active ? '#3b82f6' : '#e5e7eb'}
+                      stroke={active ? scheme.kinds.entity : '#e5e7eb'}
                       strokeWidth={active ? cfg.edgeWidth + 1 : cfg.edgeWidth}
+                      opacity={dimmed ? 0.12 : 1}
                     />
                   )
                 })}
-                {/* ---- 节点层（不画文字） ---- */}
+                {/* ---- 节点层（不画文字）；hover 聚焦时非邻居淡出 ---- */}
                 {nodes.map((n) => {
                   const p = layout[n.id]
                   if (!p) return null
-                  const r = cfg.nodeBase + (deg[n.id] ?? 0) * cfg.nodeScale
-                  const dim = hover && hover !== n.id
+                  const r = radius(n.id)
+                  const isNeighbor = Boolean(hover && neighborsOf[hover]?.has(n.id))
+                  const dim = Boolean(hover) && hover !== n.id && !isNeighbor
                   return (
                     <circle
                       key={n.id}
                       cx={p.x}
                       cy={p.y}
                       r={r}
-                      fill={KIND_COLORS[n.kind] ?? KIND_COLORS.other}
-                      opacity={dim ? 0.45 : 1}
+                      fill={nodeColor(n)}
+                      opacity={dim ? 0.16 : 1}
                       stroke={hover === n.id ? '#111827' : 'transparent'}
                       strokeWidth={hover === n.id ? 2 : 0}
                       style={{ cursor: 'pointer' }}
@@ -297,12 +428,15 @@ export default function GraphView({ onOpenPage }) {
                     />
                   )
                 })}
-                {/* ---- 标签层：最后绘制，任何节点都不遮挡文字；hover 强调 ---- */}
+                {/* ---- 标签层：避让后只画放得下的；hover 节点必显；非邻居标签同步淡出 ---- */}
                 {nodes.map((n) => {
                   const p = layout[n.id]
                   if (!p) return null
-                  const r = cfg.nodeBase + (deg[n.id] ?? 0) * cfg.nodeScale
+                  const r = radius(n.id)
                   const on = hover === n.id
+                  const isNeighbor = Boolean(hover && neighborsOf[hover]?.has(n.id))
+                  const dimmed = Boolean(hover) && !on && !isNeighbor
+                  if (!on && !shownLabels.has(n.id)) return null
                   const title = prettyTitle(n.title)
                   const shown = on || title.length > 14 ? (title.length > 22 && !on ? `${title.slice(0, 22)}…` : title) : title
                   return (
@@ -315,6 +449,7 @@ export default function GraphView({ onOpenPage }) {
                       fontFamily="'Open Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif"
                       fontWeight={on ? 800 : 500}
                       fill={on ? '#111827' : '#6b7280'}
+                      opacity={dimmed ? 0.15 : 1}
                       // 白色描边光晕：保证文字叠在连线/节点上也清晰可读
                       stroke="white"
                       strokeWidth={on ? 4 : 3}
@@ -354,13 +489,58 @@ export default function GraphView({ onOpenPage }) {
               </div>
               {legendOpen && (
                 <>
-                  {Object.entries(KIND_LABELS).map(([k, label]) => (
-                    <div key={k} className="legend-row">
-                      <span className="legend-dot" style={{ background: KIND_COLORS[k] }} />
-                      {label}
-                      <span className="count">{counts[k] ?? 0}</span>
-                    </div>
-                  ))}
+                  {/* 着色模式 + 配色方案（选择持久化到 localStorage） */}
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                    {[
+                      { k: 'kind', label: '按类型' },
+                      { k: 'community', label: '按聚类' },
+                    ].map(({ k, label }) => (
+                      <button
+                        key={k}
+                        onClick={() => setColorMode(k)}
+                        className="btn btn-sm"
+                        style={colorMode === k
+                          ? { background: 'var(--c-primary)', color: '#fff', border: 'none', padding: '3px 10px', borderRadius: 6 }
+                          : { background: 'none', color: 'var(--c-text-2)', border: '1px solid var(--c-border)', padding: '3px 10px', borderRadius: 6 }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 10 }} title="配色方案">
+                    {Object.entries(SCHEMES).map(([k, s]) => (
+                      <button
+                        key={k}
+                        aria-label={s.label}
+                        title={s.label}
+                        onClick={() => setSchemeKey(k)}
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: '50%',
+                          border: schemeKey === k ? '2px solid var(--c-primary)' : '1px solid var(--c-border)',
+                          background: `linear-gradient(135deg, ${s.kinds.entity} 50%, ${s.kinds.concept} 50%)`,
+                          cursor: 'pointer',
+                          padding: 0,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  {communityGroups
+                    ? communityGroups.map(({ c, count, rep }) => (
+                        <div key={c} className="legend-row">
+                          <span className="legend-dot" style={{ background: scheme.communities[c % scheme.communities.length] }} />
+                          {prettyTitle(rep.title)}
+                          <span className="count">{count}</span>
+                        </div>
+                      ))
+                    : Object.entries(KIND_LABELS).map(([k, label]) => (
+                        <div key={k} className="legend-row">
+                          <span className="legend-dot" style={{ background: scheme.kinds[k] }} />
+                          {label}
+                          <span className="count">{counts[k] ?? 0}</span>
+                        </div>
+                      ))}
                   <div className="legend-row" style={{ borderTop: '1px solid var(--c-border)', paddingTop: 12, marginTop: 4 }}>
                     <span className="count">节点 {nodes.length}</span>
                     <span className="count" style={{ marginLeft: 8 }}>连线 {edges.length}</span>

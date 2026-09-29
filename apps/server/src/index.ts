@@ -1,5 +1,7 @@
 import Fastify from 'fastify'
-import { readFile, writeFile, appendFile, mkdir, unlink, access } from 'node:fs/promises'
+import multipart from '@fastify/multipart'
+import { readFile, writeFile, appendFile, mkdir, unlink, access, stat } from 'node:fs/promises'
+import { accessSync } from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -12,6 +14,11 @@ import { ingestSource, gitCommitAll } from './ingest-pipeline.ts'
 import { answerQuery, buildGraphData } from './query-pipeline.ts'
 import { resolveLlmConfig, saveLlmConfig, maskApiKey, mergeApiKey, type LlmConfigFile, type LlmRoleConfig } from './llm-config.ts'
 import { syncPage, runReworkBatch, getReworkState } from './maintain-pipeline.ts'
+import {
+  readMineruKey, writeMineruKey, maskMineruKey, checkUploadQuota,
+  testMineruConnectivity, uploadFilesToMineru, pollBatchResults, fetchMarkdownFromZip,
+  readTasks, writeTasks, type MineruTask,
+} from './mineru.ts'
 
 /**
  * server 入口（D2-4e）。本地单用户，绑 127.0.0.1，无鉴权。
@@ -24,9 +31,13 @@ import { syncPage, runReworkBatch, getReworkState } from './maintain-pipeline.ts
  */
 
 const KB_ROOT = process.env.KNOWLEDGE_BASE ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..', 'data/my-wiki')
+/** data/ 根（mineru-config.json、mineru-tasks.json 存这里，与 KB git 仓库隔离） */
+const DATA_ROOT = path.resolve(KB_ROOT, '..')
 const PORT = Number(process.env.PORT ?? 3100)
 
 const app = Fastify({ logger: false })
+/** MinerU PDF 上传（≤200MB/文件，官方上限） */
+app.register(multipart, { limits: { fileSize: 200 * 1024 * 1024, files: 20 } })
 /** 全局事件总线：SSE 层（后续接入 web）与缓存失效逻辑订阅 */
 export const bus = new EventEmitter()
 
@@ -198,6 +209,197 @@ app.post('/api/v1/sources', async (req, reply) => {
 interface IngestBody {
   source: string // sources/xxx.md
 }
+
+/** 原始素材列表（v0.2.5 素材页）：文件名 + 大小 + 更新时间 */
+app.get('/api/v1/sources', async () => {
+  const snap = await scanKb(KB_ROOT)
+  const out = []
+  for (const rel of snap.sources) {
+    const abs = path.join(KB_ROOT, rel)
+    const st = await stat(abs).catch(() => null)
+    out.push({
+      path: rel,
+      name: rel.replace(/^sources\//, ''),
+      size: st?.size ?? 0,
+      updatedAt: st?.mtime.toISOString() ?? '',
+    })
+  }
+  return { sources: out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) }
+})
+
+// ---------------------------------------------------------------------------
+// MinerU PDF 解析（v0.2.5）：上传 PDF → MinerU 结构化解析 → full.md 落盘 sources/ → 自动 ingest
+// ---------------------------------------------------------------------------
+
+const MINERU_ACTIVE_STATES = new Set(['pending', 'waiting-file', 'pending-file', 'running', 'converting'])
+/** 正在后台跑 ingest 的 source（防重复触发） */
+const mineruIngestInFlight = new Set<string>()
+
+/** source 名清洗 + 落盘冲突时加时间戳后缀 */
+function mineruSourcePath(name: string): string {
+  const base = name.replace(/\.[^.]+$/, '').replace(/[^\w一-鿿.-]+/g, '-').slice(0, 80) || 'converted'
+  const candidate = `sources/${base}.md`
+  try {
+    accessSync(path.join(KB_ROOT, candidate))
+    return `sources/${base}-${Date.now()}.md`
+  } catch {
+    return candidate
+  }
+}
+
+app.get('/api/v1/mineru/config', async () => {
+  const key = await readMineruKey(DATA_ROOT)
+  return { hasKey: Boolean(key), masked: key ? maskMineruKey(key) : null }
+})
+
+app.post('/api/v1/mineru/config', async (req, reply) => {
+  const body = req.body as { apiKey?: string }
+  const next = body?.apiKey?.trim() ?? ''
+  const existing = await readMineruKey(DATA_ROOT)
+  // 打码/留空 = 保留已存 Key（与 LLM 配置同一交互）
+  if (!next || next.includes('••')) {
+    if (!existing) return reply.code(400).send({ error: 'apiKey 不能为空' })
+    return { ok: true, masked: maskMineruKey(existing) }
+  }
+  await writeMineruKey(DATA_ROOT, next)
+  return { ok: true, masked: maskMineruKey(next) }
+})
+
+interface MineruTestBody { apiKey?: string }
+
+app.post('/api/v1/mineru/config/test', async (req, reply) => {
+  const body = req.body as MineruTestBody
+  let key = body?.apiKey?.trim() ?? ''
+  if (!key || key.includes('••')) key = (await readMineruKey(DATA_ROOT)) ?? ''
+  if (!key) return reply.code(400).send({ ok: false, message: '尚未配置 API Key' })
+  return testMineruConnectivity(key)
+})
+
+/** PDF/图片 → MinerU 结构化解析任务。multipart 字段名 files（可多文件）。 */
+app.post('/api/v1/mineru/convert', async (req, reply) => {
+  const apiKey = await readMineruKey(DATA_ROOT)
+  if (!apiKey) return reply.code(400).send({ error: '尚未配置 MinerU API Key，请到「设置」页填写' })
+  const files: Array<{ name: string; bytes: Buffer }> = []
+  try {
+    // @fastify/multipart：file part 的流必须在迭代内同步消费完，否则迭代器挂起
+    for await (const part of req.parts()) {
+      if (part.type !== 'file') continue
+      const bytes = await part.toBuffer()
+      const name = part.filename ?? 'file'
+      if (!/\.(pdf|png|jpe?g|jp2|webp|gif|bmp|docx?|pptx?|xlsx?)$/i.test(name)) {
+        return reply.code(400).send({ error: `不支持的文件类型：${name}（支持 PDF/图片/Office 文档）` })
+      }
+      files.push({ name, bytes })
+    }
+  } catch {
+    return reply.code(400).send({ error: '请求不是 multipart 表单' })
+  }
+  if (files.length === 0) return reply.code(400).send({ error: '未选择文件' })
+  try {
+    checkUploadQuota(files.length)
+  } catch (e) {
+    return reply.code(429).send({ error: e instanceof Error ? e.message : String(e) })
+  }
+  // dataId 唯一化（MinerU 限制：字母数字_- 和点，≤128）
+  const stamp = Date.now().toString(36)
+  const enriched = files.map((f, i) => ({
+    ...f,
+    dataId: `${f.name.replace(/[^\w.-]+/g, '-').slice(0, 80)}-${stamp}-${i}`.replace(/^[^A-Za-z0-9_]+/, 'f'),
+  }))
+  try {
+    const batchId = await uploadFilesToMineru(apiKey, enriched)
+    const now = new Date().toISOString()
+    const tasks = await readTasks(DATA_ROOT)
+    for (const f of enriched) {
+      tasks.push({
+        batchId,
+        fileName: f.name,
+        dataId: f.dataId,
+        state: 'pending',
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+    await writeTasks(DATA_ROOT, tasks)
+    return { ok: true, batchId, count: enriched.length }
+  } catch (e) {
+    req.log.error(e)
+    return reply.code(502).send({ error: e instanceof Error ? e.message : String(e) })
+  }
+})
+
+/** 任务列表 + 惰性轮询：GET 时顺带查 MinerU 更新状态；done 的下载 zip 抽 full.md
+ *  落盘 sources/ 并后台自动 ingest（结果经 SSE 引擎浮层可见）。 */
+app.get('/api/v1/mineru/tasks', async (req, reply) => {
+  const apiKey = await readMineruKey(DATA_ROOT)
+  if (!apiKey) return { tasks: [] }
+  const tasks = await readTasks(DATA_ROOT)
+  // 按 batchId 分组出未完成任务，一次 extract-results/batch 查一批（省配额）
+  const activeBatches = new Set(tasks.filter((t) => MINERU_ACTIVE_STATES.has(t.state)).map((t) => t.batchId))
+  for (const batchId of activeBatches) {
+    let results: Awaited<ReturnType<typeof pollBatchResults>> = []
+    try {
+      results = await pollBatchResults(apiKey, batchId)
+    } catch (e) {
+      req.log.warn(`MinerU 轮询失败：${e instanceof Error ? e.message : e}`)
+      continue
+    }
+    for (const t of tasks.filter((x) => x.batchId === batchId && MINERU_ACTIVE_STATES.has(x.state))) {
+      const r = results.find((x) => (x.dataId && x.dataId === t.dataId) || x.fileName === t.fileName)
+      if (!r || r.state === t.state) continue
+      t.state = r.state
+      t.errMsg = r.errMsg
+      t.updatedAt = new Date().toISOString()
+      if (r.state === 'done' && r.fullZipUrl && !t.sourcePath) {
+        try {
+          const md = await fetchMarkdownFromZip(r.fullZipUrl)
+          const rel = mineruSourcePath(t.fileName)
+          await writeFile(path.join(KB_ROOT, rel), md, 'utf8')
+          t.sourcePath = rel
+          await gitCommitAll(KB_ROOT, `mineru: convert ${t.fileName} -> ${rel}`)
+          bus.emit('source:added', rel)
+          // 后台自动 ingest（衔接两段式管线；进度走 SSE 引擎浮层）
+          const src = rel
+          if (!mineruIngestInFlight.has(src)) {
+            mineruIngestInFlight.add(src)
+            ingestSource({ kbRoot: KB_ROOT, routing: await llmRouting(), events: bus }, src)
+              .then(() => {
+                t.ingested = true
+                t.updatedAt = new Date().toISOString()
+                return writeTasks(DATA_ROOT, tasks)
+              })
+              .catch((err) => req.log.warn(`MinerU 自动 ingest 失败（${src}）：${err instanceof Error ? err.message : err}`))
+              .finally(() => mineruIngestInFlight.delete(src))
+          }
+        } catch (e) {
+          t.state = 'failed'
+          t.errMsg = `解析结果落盘失败：${e instanceof Error ? e.message : e}`
+        }
+      }
+    }
+    await writeTasks(DATA_ROOT, tasks)
+  }
+  // 补偿：已落盘但未消化的任务（服务重启中断了后台 ingest），轮询时续接
+  for (const t of tasks) {
+    if (!t.sourcePath || t.ingested || mineruIngestInFlight.has(t.sourcePath)) continue
+    const src = t.sourcePath
+    try {
+      const routing = await llmRouting()
+      mineruIngestInFlight.add(src)
+      ingestSource({ kbRoot: KB_ROOT, routing, events: bus }, src)
+        .then(() => {
+          t.ingested = true
+          t.updatedAt = new Date().toISOString()
+          return writeTasks(DATA_ROOT, tasks)
+        })
+        .catch((err) => req.log.warn(`MinerU 补偿 ingest 失败（${src}）：${err instanceof Error ? err.message : err}`))
+        .finally(() => mineruIngestInFlight.delete(src))
+    } catch (e) {
+      req.log.warn(`MinerU 补偿 ingest 跳过（LLM 未配置？）：${e instanceof Error ? e.message : e}`)
+    }
+  }
+  return { tasks: tasks.slice().reverse() } // 新任务在前
+})
 
 app.post('/api/v1/ingest', async (req, reply) => {
   const body = req.body as IngestBody
@@ -489,7 +691,8 @@ app.post('/api/v1/sync', async (req, reply) => {
 /** 问答局部子图（v0.2 第 5 条）：种子页 + 一跳邻居 + 相关连线 */
 app.get('/api/v1/graph/sub', async (req, reply) => {
   const seedsRaw = (req.query as { seeds?: string }).seeds ?? ''
-  const seeds = seedsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+  // 问答归档页（wiki/queries/）不是知识节点，即使被命中引用也不入图（与 buildGraphData 的全局过滤一致）
+  const seeds = seedsRaw.split(',').map((s) => s.trim()).filter(Boolean).filter((s) => !s.startsWith('wiki/queries/'))
   if (seeds.length === 0) return reply.code(400).send({ error: '需要 seeds（逗号分隔的页面路径）' })
   const full = await buildGraphData(KB_ROOT, { keepSeeds: seeds })
   const seedSet = new Set(seeds)

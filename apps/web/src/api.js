@@ -39,4 +39,15 @@ export const api = {
   graphSub: (seeds) => j(`/api/graph/sub?seeds=${encodeURIComponent(seeds.join(','))}`),
   // ---- v0.2.2 · 问答历史 / 悬浮球提问 ----
   queries: () => j('/api/queries'),
+  // ---- v0.2.5 · 原始素材 / MinerU PDF 解析 ----
+  listSources: () => j('/api/sources'),
+  getMineruConfig: () => j('/api/mineru/config'),
+  saveMineruConfig: (apiKey) => post('/api/mineru/config', { apiKey }),
+  testMineru: (apiKey) => post('/api/mineru/config/test', { apiKey }),
+  mineruConvert: (files) => {
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f, f.name)
+    return j('/api/mineru/convert', { method: 'POST', body: fd })
+  },
+  mineruTasks: () => j('/api/mineru/tasks'),
 }

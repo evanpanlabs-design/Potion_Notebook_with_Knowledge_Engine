@@ -116,7 +116,9 @@ body {
 .main { flex: 1; overflow-y: auto; min-width: 0; }
 
 .page { max-width: 960px; margin: 0 auto; padding: 40px 56px 64px; }
-.page-wide { max-width: none; padding: 24px 32px 24px; }
+/* v0.2.6 统一头部基准：所有导航页用 page page-wide（素材/知识图谱同款），画布类页面追加 page-full */
+.page-wide { max-width: 1280px; margin: 0 auto; padding: 24px 32px 24px; }
+.page-full { max-width: none; }
 
 .page-title { font-family: var(--font-display); font-weight: 600; font-size: 1.375rem; margin: 0 0 4px; }
 .page-desc { color: var(--c-text-2); font-size: 0.9375rem; margin: 0 0 32px; }
@@ -523,8 +525,7 @@ span.wikilink {
 .timeline-ts { flex: none; font-family: var(--font-mono); font-size: 0.6875rem; color: var(--c-text-3); }
 
 /* 设置页 · LLM 双引擎配置 */
-.settings-page { padding: 24px 48px 120px; max-width: 860px; }
-.settings-page h1 { font-size: 1.375rem; margin: 0 0 8px; }
+.settings-page { min-width: 0; }
 .settings-sub { color: var(--c-text-3); font-size: 0.875rem; line-height: 1.7; margin: 0 0 20px; }
 .settings-sub code { font-family: var(--font-mono); font-size: 0.8125rem; background: var(--c-bg); padding: 1px 6px; border-radius: 4px; }
 .settings-warn { color: #b45309; }
@@ -740,6 +741,11 @@ span.wikilink {
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .ask-orb:hover { transform: scale(1.07); box-shadow: 0 12px 30px rgba(59, 130, 246, 0.46); }
+/* 长按拖拽：悬浮球/输入卡片整体可拖，聊天窗靠标题栏拖 */
+.ask-orb:active { cursor: grabbing; }
+.ask-orb-input { touch-action: none; }
+.ask-orb-head { cursor: grab; user-select: none; touch-action: none; }
+.ask-orb-head:active { cursor: grabbing; }
 
 /* ---- 输入态小卡片 ---- */
 .ask-orb-input {
@@ -749,7 +755,10 @@ span.wikilink {
   border-radius: 14px; box-shadow: 0 16px 44px rgba(17, 24, 39, 0.18);
   padding: 12px;
   animation: ask-orb-in 160ms ease;
+  cursor: grab;
 }
+.ask-orb-input:active { cursor: grabbing; }
+.ask-orb-input textarea { cursor: text; }
 @keyframes ask-orb-in { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
 .ask-orb-input-foot {
   display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px;
@@ -846,3 +855,35 @@ span.wikilink {
   .ask-orb-window { right: 8px; bottom: 8px; width: calc(100vw - 16px); height: calc(100vh - 16px); }
   .ask-orb-input { right: 8px; bottom: 8px; }
 }
+
+/* ========== v0.2.5 素材页（原始素材 + MinerU PDF 解析） ========== */
+.sources-page { display: flex; flex-direction: column; min-height: 0; flex: 1; max-width: 1280px; margin: 0 auto; width: 100%; box-sizing: border-box; }
+.sources-toolbar { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; flex-wrap: wrap; }
+.sources-layout { display: flex; gap: 14px; flex: 1; min-height: 0; }
+.sources-side { width: 320px; flex: none; display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+.side-block { border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-surface); overflow: hidden; }
+.side-block-title { padding: 9px 12px; border-bottom: 1px solid var(--c-border); background: var(--c-bg); font-weight: 700; font-size: 0.85rem; display: flex; align-items: center; gap: 8px; }
+.side-list { display: flex; flex-direction: column; padding: 6px; max-height: 320px; overflow-y: auto; }
+.side-item { display: flex; align-items: center; gap: 8px; border: none; background: none; text-align: left; cursor: pointer; padding: 7px 9px; border-radius: 7px; font-size: 0.85rem; color: var(--c-text-1); }
+.side-item:hover { background: var(--c-bg); }
+.side-item.active { background: var(--c-primary-soft, rgba(59, 130, 246, 0.1)); color: var(--c-primary); font-weight: 600; }
+.task-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 0.82rem; }
+.task-badge { flex: none; font-size: 0.68rem; padding: 2px 7px; border-radius: 999px; font-weight: 700; }
+.task-muted { background: var(--c-bg); color: var(--c-text-3); }
+.task-busy { background: rgba(59, 130, 246, 0.12); color: var(--c-primary); }
+.task-ok { background: rgba(16, 185, 129, 0.12); color: #059669; }
+.task-err { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
+.task-live { color: var(--c-primary); font-size: 0.68rem; animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: 0.35; } }
+.sources-view { flex: 1; min-width: 0; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-surface); display: flex; flex-direction: column; min-height: 0; }
+.sources-view-head { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--c-border); background: var(--c-bg); }
+.sources-view-body { flex: 1; min-height: 0; overflow-y: auto; }
+.source-raw { padding: 16px; margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 0.85rem; line-height: 1.65; font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+.md-preview { padding: 16px 20px; line-height: 1.7; font-size: 0.9rem; }
+.md-preview h1, .md-preview h2, .md-preview h3 { margin: 1.1em 0 0.4em; line-height: 1.35; }
+.md-preview p { margin: 0.6em 0; }
+.md-preview pre { background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 8px; padding: 12px; overflow-x: auto; font-size: 0.8rem; }
+.md-preview table { border-collapse: collapse; margin: 0.8em 0; }
+.md-preview th, .md-preview td { border: 1px solid var(--c-border); padding: 6px 10px; font-size: 0.82rem; }
+.md-preview img { max-width: 100%; }
+.md-preview blockquote { border-left: 3px solid var(--c-border); margin: 0.6em 0; padding: 2px 12px; color: var(--c-text-3); }

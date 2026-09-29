@@ -27,6 +27,52 @@ export default function AskOrb({ onOpenPage }) {
   const bufRef = useRef('')
   const flushRef = useRef(null)
   const doneRef = useRef(false) // POST 返回后不再接受迟到的 delta（避免覆盖归一化后的最终稿）
+  // 拖拽位置：ball / input / window 三种形态各自记忆（null = 用 CSS 默认右下角）
+  const [pos, setPos] = useState({ ball: null, input: null, window: null })
+
+  // ---- 长按拖拽 ----
+  // 按下后移动超过 4px 进入拖拽（普通点击不受影响）；拖完的 click 事件被吞掉，
+  // 避免球拖到别处又展开输入框。textarea/input/button 上按下不触发拖拽。
+  function dragHandlers(key) {
+    return {
+      onPointerDown: (e) => {
+        if (e.button !== 0) return
+        // 悬浮球本身是 button，需允许从它开始拖；只排除输入控件和「拖拽根内部的其它按钮」（如标题栏 — ✕）
+        const btn = e.target.closest?.('button')
+        if (e.target.closest?.('textarea, input') || (btn && btn !== e.currentTarget)) return
+        const el = e.currentTarget
+        const rect = el.getBoundingClientRect()
+        const startX = e.clientX
+        const startY = e.clientY
+        let moved = false
+        const onMove = (ev) => {
+          const dx = ev.clientX - startX
+          const dy = ev.clientY - startY
+          if (!moved && Math.hypot(dx, dy) < 4) return
+          moved = true
+          const nx = Math.min(Math.max(rect.left + dx, 8), window.innerWidth - rect.width - 8)
+          const ny = Math.min(Math.max(rect.top + dy, 8), window.innerHeight - rect.height - 8)
+          setPos((p) => ({ ...p, [key]: { x: nx, y: ny } }))
+        }
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove)
+          window.removeEventListener('pointerup', onUp)
+          el.__dragged = moved
+        }
+        window.addEventListener('pointermove', onMove)
+        window.addEventListener('pointerup', onUp)
+      },
+      onClickCapture: (e) => {
+        if (e.currentTarget.__dragged) {
+          e.currentTarget.__dragged = false
+          e.preventDefault()
+          e.stopPropagation()
+        }
+      },
+    }
+  }
+  const styleFor = (key) =>
+    pos[key] ? { left: pos[key].x, top: pos[key].y, right: 'auto', bottom: 'auto' } : undefined
 
   // SSE 订阅：问答流式通道（独立于引擎 ingest 的 llm:delta 相位）
   useEffect(() => {
@@ -132,6 +178,8 @@ export default function AskOrb({ onOpenPage }) {
     return (
       <button
         className="ask-orb"
+        style={styleFor('ball')}
+        {...dragHandlers('ball')}
         onClick={() => setMode(outcome || streamText ? 'window' : 'input')}
         title={outcome || streamText ? '回到上一条问答' : '向知识库提问'}
         aria-label="向知识库提问"
@@ -144,7 +192,7 @@ export default function AskOrb({ onOpenPage }) {
   // ---- 输入态 ----
   if (mode === 'input') {
     return (
-      <div className="ask-orb-input" role="dialog" aria-label="向知识库提问">
+      <div className="ask-orb-input" role="dialog" aria-label="向知识库提问" style={styleFor('input')} {...dragHandlers('input')}>
         <button className="ask-orb-collapse" title="收起" aria-label="收起" onClick={() => setMode('ball')}>
           —
         </button>
@@ -174,8 +222,8 @@ export default function AskOrb({ onOpenPage }) {
 
   // ---- 悬浮窗：问答进行中 / 已完成 ----
   return (
-    <div className="ask-orb-window" role="dialog" aria-label="知识库问答">
-      <div className="ask-orb-head">
+    <div className="ask-orb-window" role="dialog" aria-label="知识库问答" style={styleFor('window')}>
+      <div className="ask-orb-head" {...dragHandlers('window')} title="按住拖动窗口">
         <span className={`ask-orb-dot ${busy ? 'busy' : ''}`} />
         <strong>知识库问答</strong>
         <span className="mono ask-orb-head-status">{busy ? '回答生成中…' : outcome ? '完成' : ''}</span>

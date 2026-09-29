@@ -9,7 +9,7 @@ import { api } from '../api.js'
 const ROLE_INFO = {
   ingest: {
     title: '消化引擎（ingest）',
-    desc: '投喂素材时的两段式消化（要点分析 + 页面生成）。建议用便宜、快的模型——这一步吃 token 大头。',
+    desc: '素材导入/笔记同步时的两段式消化（要点分析 + 页面生成）。建议用便宜、快的模型——这一步吃 token 大头。',
   },
   query: {
     title: '问答引擎（query）',
@@ -18,6 +18,72 @@ const ROLE_INFO = {
 }
 
 const EMPTY_ROLE = { protocol: 'openai', baseUrl: '', apiKey: '', model: '' }
+
+/** MinerU PDF 解析集成（v0.2.5）：API Key 配置 + 连通性测试。
+ *  Key 存 data/mineru-config.json（本地文件，不入库不进 git）。 */
+function MineruCard() {
+  const [masked, setMasked] = useState(null)
+  const [draft, setDraft] = useState('')
+  const [status, setStatus] = useState(null) // { ok, message }
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.getMineruConfig().then((c) => setMasked(c.hasKey ? c.masked : null)).catch(() => {})
+  }, [])
+
+  async function save() {
+    setBusy(true)
+    setStatus(null)
+    try {
+      const r = await api.saveMineruConfig(draft.trim() || '••')
+      setMasked(r.masked)
+      setDraft('')
+      setStatus({ ok: true, message: '已保存' })
+    } catch (e) {
+      setStatus({ ok: false, message: e.message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function test() {
+    setBusy(true)
+    setStatus(null)
+    try {
+      const r = await api.testMineru(draft.trim())
+      setStatus({ ok: r.ok, message: r.message })
+    } catch (e) {
+      setStatus({ ok: false, message: e.message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="card settings-role">
+      <h2>MinerU PDF 解析</h2>
+      <p className="settings-desc">
+        在「素材」页上传 PDF/图片时，调用 MinerU 结构化解析为 Markdown，自动入库并触发消化。
+        Key 在 <a href="https://mineru.net/apiManage" target="_blank" rel="noreferrer">mineru.net API 管理</a> 页创建；
+        存于 <code>data/mineru-config.json</code>（本地文件，不入库不进 git）。官方限流：50 文件/分钟、5000 文件/天、单文件 ≤200MB。
+      </p>
+      <label className="settings-field">
+        <span>API Token {masked ? <span className="settings-hint">（已配置：{masked}，留空沿用）</span> : null}</span>
+        <input
+          type="password"
+          value={draft}
+          placeholder={masked ? '留空则沿用已保存的 Key' : 'sk-…'}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      </label>
+      <div className="settings-saverow">
+        <button className="btn btn-primary btn-sm" disabled={busy || (!draft.trim() && !masked)} onClick={save}>保存</button>
+        <button className="btn btn-secondary btn-sm" disabled={busy || (!draft.trim() && !masked)} onClick={test}>测试连通性</button>
+        {status && <span className={status.ok ? 'settings-hint' : 'settings-warn'}>{status.message}</span>}
+      </div>
+    </section>
+  )
+}
 
 function RoleForm({ role, form, onChange, onTest, testing, testResult }) {
   const set = (k, v) => onChange(role, { ...form, [k]: v })
@@ -169,15 +235,15 @@ export default function Settings() {
   }
 
   return (
-    <div className="settings-page">
-      <h1>设置</h1>
-      <p className="settings-sub">
+    <div className="page page-wide settings-page">
+      <h1 className="page-title">设置</h1>
+      <p className="page-desc settings-sub">
         LLM 双引擎配置：消化（ingest）与问答（query）可分别使用不同厂商 / 不同模型。
         支持 OpenAI 兼容协议与 Anthropic 协议（含各类兼容网关，即「自定义」场景：换 Base URL 即可）。
         保存后立即生效，无需重启；配置存在 <code>data/llm-config.json</code>（本地文件，不入库不进 git）。
         {source === 'env' && ' 当前使用环境变量兜底配置，保存后将覆盖。'}
         {loaded && source === 'none' && (
-          <strong className="settings-warn"> 尚未配置 LLM——投喂与提问不可用，请先在下方填写。</strong>
+          <strong className="settings-warn"> 尚未配置 LLM——素材导入与提问不可用，请先在下方填写。</strong>
         )}
       </p>
 
@@ -207,6 +273,8 @@ export default function Settings() {
         </button>
         <span className="settings-hint">两个角色都必填；API Key 留空表示沿用已保存的值。</span>
       </div>
+
+      <MineruCard />
     </div>
   )
 }

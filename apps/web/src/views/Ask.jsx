@@ -56,7 +56,7 @@ export default function Ask({ onOpenPage }) {
   }
 
   return (
-    <div className="page">
+    <div className="page page-wide">
       <h1 className="page-title">问答历史</h1>
       <p className="page-desc">
         你与知识库的问答记录都在这里（新在前）。提问入口在右下角的 ✦ 悬浮球——任何页面都能随手问。

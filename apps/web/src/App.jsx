@@ -4,6 +4,7 @@ import MarkdownHost from './views/MarkdownHost.jsx'
 import Overview from './views/Overview.jsx'
 import Ask from './views/Ask.jsx'
 import Notes from './views/Notes.jsx'
+import Sources from './views/Sources.jsx'
 import Graph from './views/Graph.jsx'
 import Review from './views/Review.jsx'
 import Settings from './views/Settings.jsx'
@@ -13,12 +14,15 @@ import { useEngineStream, EngineWorkbench } from './engine-stream.jsx'
 
 /** v0.2.2 导航：提问入口改为全局悬浮球，原提问页变为「问答历史」；
  *  顺序调整为 总览 → 笔记 → 知识图谱 → 审核 → 问答历史 ｜ 设置。
- *  v0.2.3 图标：换用用户提供的 iconfont SVG（见 icons.jsx）；审核暂无对应 SVG，保留字形 ☑。 */
+ *  v0.2.3 图标：换用用户提供的 iconfont SVG（见 icons.jsx）。
+ *  v0.2.5 审核：补上 check-circle-fill SVG。
+ *  v0.2.5 新增「素材」页（原始素材层，含 MinerU PDF 解析）。 */
 const NAV = [
   { id: 'overview', iconKey: 'overview', icon: '◈', label: '总览' },
   { id: 'notes', iconKey: 'notes', icon: '✎', label: '笔记' },
+  { id: 'sources', iconKey: 'sources', icon: '▤', label: '素材' },
   { id: 'graph', iconKey: 'graph', icon: '⟡', label: '知识图谱' },
-  { id: 'review', iconKey: null, icon: '☑', label: '审核' },
+  { id: 'review', iconKey: 'review', icon: '☑', label: '审核' },
   { id: 'ask', iconKey: 'ask', icon: '◎', label: '问答历史' },
   { id: 'settings', iconKey: 'settings', icon: '⚙', label: '设置' },
 ]
@@ -222,6 +226,7 @@ export default function App() {
         {view === 'overview' && <Overview onOpenPage={openPage} go={switchView} />}
         {view === 'ask' && <Ask onOpenPage={openPage} />}
         {view === 'notes' && <Notes onOpenPage={openPage} stream={stream} />}
+{view === 'sources' && <Sources onOpenPage={openPage} go={switchView} stream={stream} />}
         {view === 'graph' && <Graph onOpenPage={openPage} />}
         {view === 'review' && <Review />}
         {view === 'settings' && <Settings />}

@@ -20,8 +20,9 @@ export default function MiniGraph({ data, onOpenPage, height = 300 }) {
   const svgRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const layout = useMemo(() => {
-    const nodes = data?.nodes ?? []
-    const edges = data?.edges ?? []
+    // 问答归档节点（wiki/queries/，kind=query）不入局部子图——服务端已过滤，这里做第二道防线
+    const nodes = (data?.nodes ?? []).filter((n) => n.kind !== 'query' && !String(n.id).startsWith('wiki/queries/'))
+    const edges = (data?.edges ?? []).filter((e) => nodes.some((n) => n.id === e.source) && nodes.some((n) => n.id === e.target))
     const seedList = (data?.seeds ?? []).map((s) => (typeof s === 'string' ? s : s?.id)).filter(Boolean)
     const seedSet = new Set(seedList)
     const isSeed = (n) => seedSet.has(n.id)
