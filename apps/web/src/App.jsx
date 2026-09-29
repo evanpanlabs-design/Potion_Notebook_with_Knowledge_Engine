@@ -2,21 +2,25 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { api } from './api.js'
 import MarkdownHost from './views/MarkdownHost.jsx'
 import Overview from './views/Overview.jsx'
-import Feed from './views/Feed.jsx'
 import Ask from './views/Ask.jsx'
 import Notes from './views/Notes.jsx'
 import Graph from './views/Graph.jsx'
 import Review from './views/Review.jsx'
 import Settings from './views/Settings.jsx'
+import AskOrb from './AskOrb.jsx'
+import { NavIcon } from './icons.jsx'
+import { useEngineStream, EngineWorkbench } from './engine-stream.jsx'
 
+/** v0.2.2 导航：提问入口改为全局悬浮球，原提问页变为「问答历史」；
+ *  顺序调整为 总览 → 笔记 → 知识图谱 → 审核 → 问答历史 ｜ 设置。
+ *  v0.2.3 图标：换用用户提供的 iconfont SVG（见 icons.jsx）；审核暂无对应 SVG，保留字形 ☑。 */
 const NAV = [
-  { id: 'overview', icon: '◈', label: '总览' },
-  { id: 'feed', icon: '⇪', label: '投喂素材' },
-  { id: 'ask', icon: '◎', label: '提问' },
-  { id: 'notes', icon: '✎', label: '笔记' },
-  { id: 'review', icon: '☑', label: '审核' },
-  { id: 'graph', icon: '⟡', label: '知识图谱' },
-  { id: 'settings', icon: '⚙', label: '设置' },
+  { id: 'overview', iconKey: 'overview', icon: '◈', label: '总览' },
+  { id: 'notes', iconKey: 'notes', icon: '✎', label: '笔记' },
+  { id: 'graph', iconKey: 'graph', icon: '⟡', label: '知识图谱' },
+  { id: 'review', iconKey: null, icon: '☑', label: '审核' },
+  { id: 'ask', iconKey: 'ask', icon: '◎', label: '问答历史' },
+  { id: 'settings', iconKey: 'settings', icon: '⚙', label: '设置' },
 ]
 
 /** 路径 → 短标题（wiki/concepts/知识复利.md → 知识复利） */
@@ -105,11 +109,67 @@ function PageDrawer({ pagePath, onClose }) {
   )
 }
 
+/**
+ * 引擎状态灯（侧栏）：处理中呼吸闪烁；点按打开全局流式渲染浮层。
+ * 流挂在 App 层，切视图不打断 SSE 订阅——在笔记页消化素材时切去别的页面也能回来看到过程。
+ */
+function EngineStatus({ stream, open, onToggle }) {
+  const busy = stream.busy
+  const hasOutput = !!(stream.engine.analyze || stream.engine.generate)
+  const state = busy ? 'busy' : hasOutput ? 'done' : 'idle'
+  const label = busy ? `引擎处理中 ${stream.elapsed}s` : hasOutput ? '引擎输出' : '引擎空闲'
+  return (
+    <button
+      className={`engine-status ${state} ${open ? 'active' : ''}`}
+      onClick={onToggle}
+      title={busy ? '引擎正在处理（LLM 两段式消化）——点按查看实时输出' : '点按查看引擎实时输出'}
+    >
+      <span className={`engine-dot ${state}`} />
+      <span className="engine-status-label">{label}</span>
+    </button>
+  )
+}
+
+/** 全局引擎浮层：流式渲染器（与 Feed 时代的引擎工作台同一套渲染） */
+function EnginePanel({ stream, onClose }) {
+  const { stage, elapsed, busy } = stream
+  return (
+    <aside className="engine-panel" role="dialog" aria-label="引擎实时输出">
+      <div className="engine-panel-head">
+        <span className="engine-dot busy" />
+        <span className="engine-panel-title mono">
+          引擎工作台{busy ? ` · 处理中 ${elapsed}s` : ''}
+        </span>
+        {stage?.text && (
+          <span className="mono" style={{ color: 'var(--c-text-3)', fontSize: '0.75rem', marginLeft: 8 }}>
+            {stage.text}
+          </span>
+        )}
+        <button className="drawer-close" onClick={onClose} aria-label="关闭">✕</button>
+      </div>
+      <div className="engine-panel-body">
+        {busy ? (
+          <EngineWorkbench stream={stream} active />
+        ) : stream.engine.analyze || stream.engine.generate ? (
+          <EngineWorkbench stream={stream} active />
+        ) : (
+          <div className="mono" style={{ color: 'var(--c-text-3)', padding: 16 }}>
+            引擎当前空闲。在「笔记」页写笔记并「同步到知识库」、或用左侧「导入素材」把一份材料喂给引擎，
+            处理时的 LLM 实时输出会在这里流式展示。
+          </div>
+        )}
+      </div>
+    </aside>
+  )
+}
+
 /** markdown 宿主已拆至 views/MarkdownHost.jsx（避免 App ↔ Overview 循环依赖） */
 
 export default function App() {
   const [view, setView] = useState('overview')
   const [pagePath, setPagePath] = useState(null)
+  const [engineOpen, setEngineOpen] = useState(false)
+  const stream = useEngineStream()
 
   const openPage = useCallback((p) => setPagePath(p), [])
 
@@ -126,6 +186,11 @@ export default function App() {
       setPagePath(null)
     }
   }, [])
+
+  // 引擎开始干活时自动弹出浮层（也可手动开合）
+  useEffect(() => {
+    if (stream.busy) setEngineOpen(true)
+  }, [stream.busy])
 
   return (
     <div className="app">
@@ -145,23 +210,26 @@ export default function App() {
               className={`nav-item ${view === n.id ? 'active' : ''}`}
               onClick={() => switchView(n.id)}
             >
-              <span className="nav-icon" aria-hidden>{n.icon}</span>
+              <span className="nav-icon" aria-hidden>{n.iconKey ? <NavIcon name={n.iconKey} /> : n.icon}</span>
               <span className="nav-text">{n.label}</span>
             </button>
           ))}
         </div>
+        <EngineStatus stream={stream} open={engineOpen} onToggle={() => setEngineOpen((o) => !o)} />
         <div className="sidebar-footer">local-first · v0.1</div>
       </nav>
       <main className="main">
         {view === 'overview' && <Overview onOpenPage={openPage} go={switchView} />}
-        {view === 'feed' && <Feed go={switchView} onOpenPage={openPage} />}
         {view === 'ask' && <Ask onOpenPage={openPage} />}
-        {view === 'notes' && <Notes onOpenPage={openPage} />}
+        {view === 'notes' && <Notes onOpenPage={openPage} stream={stream} />}
         {view === 'graph' && <Graph onOpenPage={openPage} />}
         {view === 'review' && <Review />}
-{view === 'settings' && <Settings />}
+        {view === 'settings' && <Settings />}
       </main>
+      {engineOpen && <EnginePanel stream={stream} onClose={() => setEngineOpen(false)} />}
       <PageDrawer pagePath={pagePath} onClose={closeDrawer} />
+      {/* 全局悬浮球提问：常驻所有视图之上（v0.2.2） */}
+      <AskOrb onOpenPage={openPage} />
     </div>
   )
 }

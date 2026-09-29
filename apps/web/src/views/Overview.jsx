@@ -59,10 +59,10 @@ export default function Overview({ onOpenPage, go }) {
       {status && status.pages === 0 && (
         <div className="empty-state">
           知识库还是空的。去
-          <button className="btn btn-sm btn-primary" style={{ margin: '0 8px' }} onClick={() => go('feed')}>
-            投喂第一份素材
+          <button className="btn btn-sm btn-primary" style={{ margin: '0 8px' }} onClick={() => go('notes')}>
+            笔记页导入素材
           </button>
-          ，引擎会自动把它消化成结构化 wiki 页面。
+          或写一篇笔记并「同步到知识库」，引擎会把它消化成结构化 wiki 页面。
         </div>
       )}
 

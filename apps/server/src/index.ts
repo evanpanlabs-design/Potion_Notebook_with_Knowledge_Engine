@@ -186,8 +186,8 @@ app.post('/api/v1/sources', async (req, reply) => {
   if (!body?.filename || !body?.content) {
     return reply.code(400).send({ error: '需要 filename 与 content' })
   }
-  if (!/^[\w.-]+(\.md|\.txt)$/.test(body.filename)) {
-    return reply.code(400).send({ error: 'filename 仅允许 .md/.txt' })
+  if (!/^[\w\u4e00-\u9fff.-]+(\.md|\.txt)$/.test(body.filename)) {
+    return reply.code(400).send({ error: 'filename 仅允许 .md/.txt（支持中文名）' })
   }
   await mkdir(path.join(KB_ROOT, 'sources'), { recursive: true })
   await writeFile(path.join(KB_ROOT, 'sources', body.filename), body.content, 'utf8')
@@ -239,6 +239,29 @@ app.post('/api/v1/query', async (req, reply) => {
 
 /** 图谱数据（F7 前端直接消费） */
 app.get('/api/v1/graph', async () => buildGraphData(KB_ROOT))
+
+/** 问答历史：wiki/queries/ 归档列表（新在前，排除已过期未及 GC 的）。
+ *  v0.2.2：提问入口改为全局悬浮球，本页只做历史陈列。 */
+app.get('/api/v1/queries', async () => {
+  const snap = await scanKb(KB_ROOT)
+  const now = Date.now()
+  const out: Array<{ path: string; question: string; createdAt: string; expiresAt: string | null }> = []
+  for (const rel of snap.pages) {
+    if (!rel.startsWith('wiki/queries/')) continue
+    const text = await readFile(path.join(KB_ROOT, rel), 'utf8')
+    const { fm } = parsePage(text)
+    const exp = typeof fm['expires_at'] === 'string' ? fm['expires_at'] : null
+    if (exp && Date.parse(exp) <= now) continue
+    out.push({
+      path: rel,
+      question: String(fm['question'] ?? rel.split('/').pop()?.replace(/\.md$/, '') ?? ''),
+      createdAt: String(fm['created_at'] ?? ''),
+      expiresAt: exp,
+    })
+  }
+  out.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  return { queries: out }
+})
 
 /** 笔记列表（v0.2）：含项目分层、ingest 同步状态、归档标记。
  *  同步状态：ingested_sha256 与当前内容 hash 比对 → dirty（有改动未消化）/ never（从未消化） */
@@ -354,20 +377,59 @@ app.delete('/api/v1/notes', async (req, reply) => {
   return { ok: true, path: rel, commitSha }
 })
 
-/** 全库文件树（文档工作台左栏）：wiki 页 + sources + index/log，按目录分组返回扁平列表 */
-app.get('/api/v1/files', async () => {
-  const snap = await scanKb(KB_ROOT)
-  const extraRoot = ['index.md', 'log.md', 'AGENTS.md']
-  const entries: Array<{ path: string; kind: string; reviewed?: boolean }> = []
-  for (const p of snap.pages) entries.push({ path: p, kind: p.startsWith('wiki/entities/') ? 'entity' : p.startsWith('wiki/concepts/') ? 'concept' : p.startsWith('wiki/sources/') ? 'source' : p.startsWith('wiki/queries/') ? 'query' : 'wiki', reviewed: snap.reviewedPages.has(p) })
-  for (const s of snap.sources) entries.push({ path: s, kind: 'raw-source' })
-  for (const e of extraRoot) {
-    try {
-      await access(path.join(KB_ROOT, e))
-      entries.push({ path: e, kind: 'meta' })
-    } catch { /* 不存在跳过 */ }
+/** 笔记重命名：同目录内改文件名（分组不变）；若 frontmatter title 就是旧文件名则一并同步。
+ *  实现 = 新路径写入（带更新后的 frontmatter）+ 旧文件 unlink + git 留痕。 */
+app.post('/api/v1/notes/rename', async (req, reply) => {
+  const body = req.body as { path?: string; filename?: string }
+  const rel = body?.path ?? ''
+  if (!rel.startsWith('notes/') || !rel.endsWith('.md') || rel.includes('..')) {
+    return reply.code(400).send({ error: 'path 必须是 notes/ 下的 .md 文件' })
   }
-  return { files: entries.sort((a, b) => a.path.localeCompare(b.path)) }
+  const filename = body?.filename ?? ''
+  if (!/^[\w\u4e00-\u9fff.-]+\.md$/.test(filename)) {
+    return reply.code(400).send({ error: 'filename 仅允许中英文/数字/连字符/点，且以 .md 结尾' })
+  }
+  const abs = path.join(KB_ROOT, rel)
+  let text: string
+  try {
+    text = await readFile(abs, 'utf8')
+  } catch {
+    return reply.code(404).send({ error: '笔记不存在' })
+  }
+  const dirParts = rel.split('/').slice(0, -1)
+  const newRel = [...dirParts, filename].join('/')
+  if (newRel === rel) return { ok: true, path: rel, unchanged: true }
+  const newAbs = path.join(KB_ROOT, newRel)
+  try {
+    await readFile(newAbs, 'utf8')
+    return reply.code(400).send({ error: '同名笔记已存在' })
+  } catch { /* 目标名可用 */ }
+
+  const oldBase = rel.split('/').pop()!.replace(/\.md$/, '')
+  const newBase = filename.replace(/\.md$/, '')
+  const { fm, body: pageBody } = parsePage(text)
+  // title 是默认值（=旧文件名）时跟随改名；用户自定义过的 title 不动
+  if (fm['title'] === undefined || fm['title'] === oldBase) fm['title'] = newBase
+  fm['updated_at'] = new Date().toISOString()
+  await writeFile(newAbs, serializePage(fm, pageBody), 'utf8')
+  await unlink(abs)
+  await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('note', `重命名 ${oldBase} → ${newBase}`), 'utf8')
+  const commitSha = await gitCommitAll(KB_ROOT, `note: rename ${rel} -> ${newRel}`)
+  bus.emit('note:saved', newRel)
+  return { ok: true, path: newRel, commitSha }
+})
+
+/** 全库文件树（文档工作台左栏）：wiki 页 + sources，按目录分组返回扁平列表。
+ *  query 归档页与根目录元文件（index/log/AGENTS）是系统内部产物，不向用户展示（query 有过期 GC，看它没意义） */
+app.get('/api/v1/files', async () => {
+const snap = await scanKb(KB_ROOT)
+const entries: Array<{ path: string; kind: string; reviewed?: boolean }> = []
+for (const p of snap.pages) {
+if (p.startsWith('wiki/queries/')) continue
+entries.push({ path: p, kind: p.startsWith('wiki/entities/') ? 'entity' : p.startsWith('wiki/concepts/') ? 'concept' : p.startsWith('wiki/sources/') ? 'source' : 'wiki', reviewed: snap.reviewedPages.has(p) })
+}
+for (const s of snap.sources) entries.push({ path: s, kind: 'raw-source' })
+return { files: entries.sort((a, b) => a.path.localeCompare(b.path)) }
 })
 
 /** 页面编辑（v0.2 第 1 条）：wiki/ 与 sources/ 下任意 md 可改。
@@ -429,7 +491,7 @@ app.get('/api/v1/graph/sub', async (req, reply) => {
   const seedsRaw = (req.query as { seeds?: string }).seeds ?? ''
   const seeds = seedsRaw.split(',').map((s) => s.trim()).filter(Boolean)
   if (seeds.length === 0) return reply.code(400).send({ error: '需要 seeds（逗号分隔的页面路径）' })
-  const full = await buildGraphData(KB_ROOT)
+  const full = await buildGraphData(KB_ROOT, { keepSeeds: seeds })
   const seedSet = new Set(seeds)
   const keep = new Set<string>(seeds)
   for (const e of full.edges) {
@@ -646,6 +708,8 @@ const SSE_EVENTS = [
   'note:saved',
   'review:done',
   'retrieve:done',
+  'query:start',
+  'query:delta',
   'query:done',
 ] as const
 
@@ -679,7 +743,11 @@ app.get('/api/v1/events', (req, reply) => {
 })
 
 app.listen({ port: PORT, host: '127.0.0.1' }).then(async () => {
-  await mkdir(KB_ROOT, { recursive: true })
-  await ensureKbGit(KB_ROOT)
-  console.log(`knowledge-engine server listening on http://127.0.0.1:${PORT} (KB: ${KB_ROOT})`)
+await mkdir(KB_ROOT, { recursive: true })
+await ensureKbGit(KB_ROOT)
+// 过期 query 遗忘（GC）：启动即清理一次，之后每小时巡检
+const { gcExpiredQueries } = await import('./query-pipeline.ts')
+gcExpiredQueries(KB_ROOT).then((n) => n.length > 0 && console.log(`[gc] 遗忘 ${n.length} 条过期 query：${n.join(', ')}`)).catch(() => {})
+setInterval(() => gcExpiredQueries(KB_ROOT).catch(() => {}), 60 * 60 * 1000).unref()
+console.log(`knowledge-engine server listening on http://127.0.0.1:${PORT} (KB: ${KB_ROOT})`)
 })

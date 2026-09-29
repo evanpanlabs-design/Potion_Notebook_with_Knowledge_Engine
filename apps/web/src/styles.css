@@ -103,6 +103,7 @@ body {
 .nav-item:hover { background: var(--c-bg); color: var(--c-text); }
 .nav-item.active { background: var(--c-primary-soft); color: var(--c-primary); }
 .nav-item .nav-icon { width: 20px; text-align: center; font-size: 1rem; }
+.nav-item .nav-icon svg { width: 17px; height: 17px; display: block; margin: 0 auto; }
 
 .sidebar-footer {
   margin-top: auto;
@@ -357,6 +358,7 @@ a.wikilink:hover { background: #dbeafe; text-decoration: underline; }
 }
 .notes-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .note-list { display: flex; flex-direction: column; gap: 4px; }
+/* 审核页侧栏：队列列表滚动（v0.2.3 改在 .review-subpanel 内），底部页脚固定可见 */
 .note-item {
   display: flex; flex-direction: column; gap: 2px;
   width: 100%; text-align: left;
@@ -557,7 +559,15 @@ span.wikilink {
 .doc-group-label {
   font-family: var(--font-mono); font-size: 0.6875rem; font-weight: 700; color: var(--c-text-3);
   text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 8px 4px;
+  display: flex; align-items: center; gap: 4px;
 }
+/* 项目组标签右侧「+」：在该组下直接新建笔记 */
+.group-add {
+  border: none; background: none; cursor: pointer; flex: none;
+  color: var(--c-text-3); font-size: 0.875rem; line-height: 1;
+  width: 20px; height: 20px; border-radius: 5px;
+}
+.group-add:hover { background: var(--c-bg); color: var(--c-primary); }
 .note-row { display: flex; align-items: stretch; border-radius: 8px; }
 .note-row .note-item { flex: 1; min-width: 0; text-align: left; }
 .note-row.active .note-item { background: var(--c-primary-soft, #eef7f5); }
@@ -612,9 +622,29 @@ span.wikilink {
   border-radius: 999px; padding: 1px 8px; margin-left: 8px;
 }
 .rework-tag.deferred { color: var(--c-text-3); background: var(--c-bg); }
-.rework-pool { border-top: 1px solid var(--c-border); padding: 10px 12px 0; }
-.rework-pool-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.rework-pool-hint { font-size: 0.75rem; color: var(--c-text-3); padding: 6px 0; line-height: 1.5; }
+/* v0.2.3 审核页侧栏：上下两个子栏（上=返修池，下=待审核），各自独立成块 */
+.review-subpanel {
+  margin: 10px 10px 0;
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  background: var(--c-surface);
+  display: flex; flex-direction: column;
+  min-height: 0; overflow: hidden;
+  flex: none;
+}
+.review-subpanel.pool { max-height: 46%; }
+.review-subpanel.queue { flex: 1 1 auto; margin-bottom: 10px; }
+.review-subpanel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-bg);
+  flex: none;
+}
+.review-subpanel-head .btn { white-space: nowrap; flex: none; }
+.review-subpanel-head .pane-title { white-space: nowrap; }
+.review-subpanel .note-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px; }
+.rework-pool-hint { font-size: 0.75rem; color: var(--c-text-3); padding: 6px 12px 0; line-height: 1.5; }
 .rework-pool-hint.running { color: #b45309; }
 .rework-form { border-top: 1px solid var(--c-border); padding: 14px 48px 20px; background: var(--c-surface, #fff); }
 .rework-form .field-label { display: block; margin-bottom: 6px; font-size: 0.8125rem; font-weight: 600; color: var(--c-text-2); }
@@ -631,3 +661,188 @@ span.wikilink {
 .minigraph-legend .legend-row { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem; color: var(--c-text-2); }
 .legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 
+
+/* ========== v0.2.1 全局引擎状态 + 投喂入口收编 ========== */
+/* 侧栏引擎状态灯：处理中呼吸闪烁，点开浮层看 LLM 流式输出 */
+.engine-status {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 12px 8px; padding: 8px 10px;
+  border: 1px solid var(--c-border); border-radius: var(--r-md, 8px);
+  background: var(--c-bg); cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.75rem; color: var(--c-text-3);
+  transition: border-color 120ms ease;
+}
+.engine-status:hover { border-color: var(--c-primary, #4a9e8f); }
+.engine-status.active { border-color: var(--c-primary, #4a9e8f); }
+.engine-status-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.engine-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--c-text-3); opacity: 0.6;
+}
+.engine-dot.done { background: var(--c-success, #16a34a); opacity: 1; }
+.engine-dot.busy {
+  background: var(--c-accent, #f59e0b); opacity: 1;
+  animation: engine-breathe 1.4s ease-in-out infinite;
+}
+@keyframes engine-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.45); }
+  50% { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
+}
+
+/* 引擎浮层：右侧抽屉式流式渲染器（状态灯点开） */
+.engine-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
+  width: min(560px, 86vw);
+  background: var(--c-surface); border-left: 1px solid var(--c-border);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.12);
+  display: flex; flex-direction: column;
+  animation: engine-panel-in 160ms ease;
+}
+@keyframes engine-panel-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.engine-panel-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px; border-bottom: 1px solid var(--c-border);
+}
+.engine-panel-head .drawer-close { margin-left: auto; }
+.engine-panel-title { font-size: 0.8125rem; font-weight: 600; color: var(--c-text); }
+.engine-panel-body { flex: 1; overflow-y: auto; padding: 16px; min-height: 0; }
+
+/* 导入素材弹窗（收编原投喂页） */
+.import-dialog {
+  position: fixed; z-index: 70; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(640px, 92vw); max-height: 86vh;
+  background: var(--c-surface); border: 1px solid var(--c-border);
+  border-radius: 12px; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.import-dialog .drawer-head { padding: 14px 20px; border-bottom: 1px solid var(--c-border); }
+.import-dialog-body { padding: 16px 20px 20px; overflow-y: auto; }
+
+@media (max-width: 960px) {
+  .engine-status { margin: 0 4px 8px; justify-content: center; }
+  .engine-status-label { display: none; }
+  .engine-panel { width: 100vw; }
+}
+
+/* ============================================================
+ * v0.2.2 · 悬浮球提问 / 问答历史 / 文件导入 / 图谱微调折叠
+ * ============================================================ */
+
+/* ---- 右下角悬浮球（提问入口，常驻所有视图之上） ---- */
+.ask-orb {
+  position: fixed; right: 22px; bottom: 22px; z-index: 80;
+  width: 52px; height: 52px; border-radius: 50%;
+  border: none; cursor: pointer;
+  background: linear-gradient(135deg, var(--c-primary), var(--c-secondary));
+  color: #fff; font-size: 20px; line-height: 1;
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.38);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.ask-orb:hover { transform: scale(1.07); box-shadow: 0 12px 30px rgba(59, 130, 246, 0.46); }
+
+/* ---- 输入态小卡片 ---- */
+.ask-orb-input {
+  position: fixed; right: 22px; bottom: 22px; z-index: 80;
+  width: min(400px, 92vw);
+  background: var(--c-surface); border: 1px solid var(--c-border);
+  border-radius: 14px; box-shadow: 0 16px 44px rgba(17, 24, 39, 0.18);
+  padding: 12px;
+  animation: ask-orb-in 160ms ease;
+}
+@keyframes ask-orb-in { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
+.ask-orb-input-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px;
+}
+.ask-orb-input-foot .mono { color: var(--c-text-3); font-size: 0.6875rem; }
+/* 输入态收起按钮（也可点击外部/Esc 收起） */
+.ask-orb-collapse {
+  position: absolute; top: 6px; right: 6px;
+  border: none; background: none; cursor: pointer;
+  color: var(--c-text-3); font-size: 0.875rem; line-height: 1;
+  width: 24px; height: 24px; border-radius: 6px;
+}
+.ask-orb-collapse:hover { background: var(--c-bg); color: var(--c-text); }
+
+/* ---- 悬浮窗（问答展开） ---- */
+.ask-orb-window {
+  position: fixed; right: 22px; bottom: 22px; z-index: 80;
+  width: min(500px, 94vw); height: min(660px, 84vh);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--c-surface); border: 1px solid var(--c-border);
+  border-radius: 16px; box-shadow: 0 24px 60px rgba(17, 24, 39, 0.22);
+  animation: ask-orb-in 160ms ease;
+}
+.ask-orb-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px; border-bottom: 1px solid var(--c-border);
+  background: linear-gradient(135deg, var(--c-primary-soft), var(--c-secondary-soft));
+}
+.ask-orb-head-status { color: var(--c-text-3); font-size: 0.6875rem; }
+.ask-orb-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--c-success); flex: none;
+}
+.ask-orb-dot.busy { background: var(--c-primary); animation: engine-breathe 1.4s ease-in-out infinite; }
+.ask-orb-body { flex: 1; overflow-y: auto; padding: 14px; min-height: 0; }
+.ask-orb-q {
+  font-weight: 700; font-size: 0.9375rem; line-height: 1.5;
+  padding: 10px 12px; margin-bottom: 12px;
+  background: var(--c-bg); border-left: 3px solid var(--c-primary); border-radius: 6px;
+}
+.ask-orb-answer { position: relative; }
+.ask-orb-caret { color: var(--c-primary); animation: engine-breathe 1s ease-in-out infinite; }
+.ask-orb-answer .cite-chips { margin-top: 12px; }
+.ask-orb-body .card { margin-bottom: 12px; }
+.ask-orb-archive { color: var(--c-text-3); font-size: 0.6875rem; margin-top: 4px; }
+.ask-orb-foot {
+  display: flex; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid var(--c-border);
+}
+.ask-orb-inline-hint {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%; margin: 0 4px;
+  background: linear-gradient(135deg, var(--c-primary), var(--c-secondary));
+  color: #fff; font-size: 11px;
+}
+
+/* ---- 导入素材：文件拖放区 ---- */
+.file-drop {
+  border: 1.5px dashed var(--c-border-strong); border-radius: 10px;
+  padding: 28px 16px; text-align: center; cursor: pointer;
+  color: var(--c-text-2); transition: border-color 0.15s ease, background 0.15s ease;
+}
+.file-drop:hover, .file-drop.over { border-color: var(--c-primary); background: var(--c-primary-soft); }
+.file-drop-hint { margin-top: 6px; font-size: 0.75rem; color: var(--c-text-3); }
+.file-chip {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px;
+}
+.file-chip-meta { color: var(--c-text-3); font-size: 0.75rem; }
+
+/* ---- MiniGraph 导出工具条 ---- */
+.minigraph-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 6px;
+}
+.minigraph-bar-note { color: var(--c-text-3); font-size: 0.6875rem; }
+
+/* ---- 问答历史列表 ---- */
+.history-list { display: flex; flex-direction: column; gap: 10px; }
+.history-item { padding: 0; overflow: hidden; }
+.history-item.open { border-color: var(--c-primary); }
+.history-head {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 12px 16px; background: none; border: none; cursor: pointer;
+  text-align: left; font: inherit;
+}
+.history-head:hover { background: var(--c-bg); }
+.history-q { font-weight: 600; color: var(--c-text); line-height: 1.5; }
+.history-meta { color: var(--c-text-3); font-size: 0.6875rem; flex: none; }
+.history-body { padding: 0 16px 14px; border-top: 1px solid var(--c-border); padding-top: 12px; }
+
+/* ---- 返修池条目列表（v0.2.2：条目真正挪进池区块） ---- */
+.rework-pool-list { display: flex; flex-direction: column; overflow-y: auto; padding: 8px; }
+
+@media (max-width: 960px) {
+  .ask-orb-window { right: 8px; bottom: 8px; width: calc(100vw - 16px); height: calc(100vh - 16px); }
+  .ask-orb-input { right: 8px; bottom: 8px; }
+}

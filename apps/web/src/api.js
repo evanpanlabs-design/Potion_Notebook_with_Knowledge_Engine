@@ -31,9 +31,12 @@ export const api = {
   sync: (path) => post('/api/sync', { path }),
   archiveNote: (path, archived) => post('/api/notes/archive', { path, archived }),
   deleteNote: (path) => j(`/api/notes?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  renameNote: (path, filename) => post('/api/notes/rename', { path, filename }),
   saveNoteEx: (filename, content, title, project) => post('/api/notes', { filename, content, title, project }),
   reviewEx: (path, action, note) => post('/api/review', { path, action, note }),
   reworkStatus: () => j('/api/review/rework-status'),
   reworkRun: (items) => post('/api/review/rework-run', { items }),
   graphSub: (seeds) => j(`/api/graph/sub?seeds=${encodeURIComponent(seeds.join(','))}`),
+  // ---- v0.2.2 · 问答历史 / 悬浮球提问 ----
+  queries: () => j('/api/queries'),
 }

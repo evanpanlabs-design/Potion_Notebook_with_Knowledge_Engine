@@ -2,16 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Graph from 'graphology'
 import forceAtlas2 from 'graphology-layout-forceatlas2'
 import { api } from '../api.js'
+import { exportSvgToPng } from '../export-svg.js'
 
 const KIND_COLORS = {
   entity: '#3b82f6',
   concept: '#8b5cf6',
   source: '#6b7280',
-  query: '#16a34a',
   note: '#f59e0b',
   other: '#9ca3af',
 }
-const KIND_LABELS = { entity: '实体', concept: '概念', source: '来源', query: '问答', note: '笔记', other: '其他' }
+const KIND_LABELS = { entity: '实体', concept: '概念', source: '来源', note: '笔记', other: '其他' }
 
 /** 路径式 title 美化：wiki/queries/xxx.md → xxx */
 function prettyTitle(t) {
@@ -37,8 +37,11 @@ export default function GraphView({ onOpenPage }) {
   const [error, setError] = useState('')
   const [hover, setHover] = useState(null)
   const [legendOpen, setLegendOpen] = useState(true) // 图例可折叠（默认展开）
+  const [tuneOpen, setTuneOpen] = useState(false) // 微调面板可折叠（默认收起，基准参数已调好）
   const [showSources, setShowSources] = useState(false) // 来源节点默认不渲染
-  const [cfg, setCfg] = useState({ nodeBase: 6, nodeScale: 2.5, edgeWidth: 1, repulsion: 20, gravity: 4 })
+  // v0.2.2 基准下调：节点半径基准缩到原 70%（6→4.2，大小差异同步 2.5→1.75），
+  // 引力聚拢加倍（4→8，滑块上限同步提高到 16），留出上下微调空间
+  const [cfg, setCfg] = useState({ nodeBase: 4.2, nodeScale: 1.75, edgeWidth: 1, repulsion: 20, gravity: 8 })
   const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
 
   const svgRef = useRef(null)
@@ -192,32 +195,54 @@ export default function GraphView({ onOpenPage }) {
 
       {graph && layout && (
         <>
-          {/* ---- 调节面板：节点大小 / 连线宽度 / 斥力 / 来源开关 / 视图复位 ---- */}
-          <div className="card" style={{ display: 'flex', flexWrap: 'wrap', gap: '16px 28px', alignItems: 'center', padding: '12px 16px', marginBottom: 16 }}>
-            {[
-              { k: 'nodeBase', label: '节点大小', min: 3, max: 14, step: 0.5 },
-              { k: 'nodeScale', label: '大小差异', min: 0, max: 6, step: 0.25 },
-              { k: 'edgeWidth', label: '连线宽度', min: 0.5, max: 3, step: 0.25 },
-              { k: 'repulsion', label: '斥力间距', min: 4, max: 80, step: 2 },
-              { k: 'gravity', label: '引力聚拢', min: 0.5, max: 10, step: 0.5 },
-            ].map(({ k, label, min, max, step }) => (
-              <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8125rem', color: 'var(--c-text-2)' }}>
-                {label}
-                <input type="range" min={min} max={max} step={step} value={cfg[k]} onChange={upd(k)} style={{ width: 110, accentColor: 'var(--c-accent, #3b82f6)' }} />
-                <span className="mono" style={{ color: 'var(--c-text-3)', fontSize: 12, minWidth: 28 }}>{cfg[k]}</span>
-              </label>
-            ))}
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8125rem', color: 'var(--c-text-2)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={showSources} onChange={(e) => setShowSources(e.target.checked)} />
-              显示来源节点
-            </label>
-            <span style={{ flex: 1 }} />
-            <button className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '0.8125rem' }} onClick={() => setView({ zoom: 1, x: 0, y: 0 })}>
-              重置视图
-            </button>
-            <span className="mono" style={{ color: 'var(--c-text-3)', fontSize: 12 }}>
-              缩放 {view.zoom.toFixed(2)}×
-            </span>
+          {/* ---- 调节面板：标题行常显（微调折叠开关 / 导出 / 复位），滑杆默认收起 ---- */}
+          <div className="card" style={{ padding: '8px 16px', marginBottom: 16 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 20px', alignItems: 'center' }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setTuneOpen((v) => !v)}
+                aria-expanded={tuneOpen}
+              >
+                ⚙ 微调 {tuneOpen ? '▾' : '▸'}
+              </button>
+              <span className="mono" style={{ color: 'var(--c-text-3)', fontSize: 12, flex: 1 }}>
+                节点大小随引用度增长 · 连线为 wikilink 引用
+              </span>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => exportSvgToPng(svgRef.current, '知识图谱.png').catch((e) => setError(`导出失败：${e.message}`))}
+                title="把当前图谱导出为 PNG 图片（2x 分辨率）"
+              >
+                ⤓ 导出图片
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setView({ zoom: 1, x: 0, y: 0 })}>
+                重置视图
+              </button>
+              <span className="mono" style={{ color: 'var(--c-text-3)', fontSize: 12 }}>
+                缩放 {view.zoom.toFixed(2)}×
+              </span>
+            </div>
+            {tuneOpen && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px 28px', alignItems: 'center', padding: '12px 0 4px', borderTop: '1px solid var(--c-border)', marginTop: 10 }}>
+                {[
+                  { k: 'nodeBase', label: '节点大小', min: 2, max: 14, step: 0.2 },
+                  { k: 'nodeScale', label: '大小差异', min: 0, max: 6, step: 0.25 },
+                  { k: 'edgeWidth', label: '连线宽度', min: 0.5, max: 3, step: 0.25 },
+                  { k: 'repulsion', label: '斥力间距', min: 4, max: 80, step: 2 },
+                  { k: 'gravity', label: '引力聚拢', min: 0.5, max: 16, step: 0.5 },
+                ].map(({ k, label, min, max, step }) => (
+                  <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8125rem', color: 'var(--c-text-2)' }}>
+                    {label}
+                    <input type="range" min={min} max={max} step={step} value={cfg[k]} onChange={upd(k)} style={{ width: 110, accentColor: 'var(--c-primary)' }} />
+                    <span className="mono" style={{ color: 'var(--c-text-3)', fontSize: 12, minWidth: 28 }}>{cfg[k]}</span>
+                  </label>
+                ))}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8125rem', color: 'var(--c-text-2)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={showSources} onChange={(e) => setShowSources(e.target.checked)} />
+                  显示来源节点
+                </label>
+              </div>
+            )}
           </div>
 
           <div className="graph-stage">
@@ -287,7 +312,7 @@ export default function GraphView({ onOpenPage }) {
                       y={p.y + r + 14}
                       textAnchor="middle"
                       fontSize={on ? 14 : 11.5}
-                      fontFamily="var(--font-body)"
+                      fontFamily="'Open Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif"
                       fontWeight={on ? 800 : 500}
                       fill={on ? '#111827' : '#6b7280'}
                       // 白色描边光晕：保证文字叠在连线/节点上也清晰可读

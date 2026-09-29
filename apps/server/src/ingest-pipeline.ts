@@ -17,9 +17,9 @@ import {
   AnalysisReport,
   GenerationResult,
   renderIndex,
-  rebuildIndexSection,
   renderLogEntry,
   parseLlmJson,
+  parsePage,
   scanKb,
   readTagVocabulary,
   serializePage,
@@ -228,18 +228,12 @@ export async function ingestSource(
   }
 
   // ---------- index.md / log.md 更新 ----------
+  // v0.2.2 修复：全量重建目录。此前用 rebuildIndexSection 增量更新——每次只用“本次消化”
+  // 的条目覆盖对应段，会把之前消化的条目冲掉（index.md 只剩最后一次消化的内容）。
+  // 现改为每次扫描全库 wiki/entities + wiki/concepts 重建，目录始终反映全库；
+  // 同时 LLM 消化上下文里的“现有目录”也更完整，跨来源去重效果更好。
   const indexAbs = path.join(kbRoot, 'index.md')
-  const indexText = await readFile(indexAbs, 'utf8').catch(() => '# 内容目录\n')
-  const entityEntries = proposals
-    .filter((p) => p.path.startsWith('wiki/entities/'))
-    .map((p) => ({ page: (p.fm['title'] as string) ?? p.path, summary: firstSentence(p.body), section: 'entities' as const }))
-  const conceptEntries = proposals
-    .filter((p) => p.path.startsWith('wiki/concepts/'))
-    .map((p) => ({ page: (p.fm['title'] as string) ?? p.path, summary: firstSentence(p.body), section: 'concepts' as const }))
-  let newIndex = indexText
-  if (entityEntries.length) newIndex = rebuildIndexSection(newIndex, 'entities', entityEntries)
-  if (conceptEntries.length) newIndex = rebuildIndexSection(newIndex, 'concepts', conceptEntries)
-  await writeFile(indexAbs, newIndex, 'utf8')
+  await writeFile(indexAbs, await renderFullIndex(kbRoot), 'utf8')
   await appendFile(path.join(kbRoot, 'log.md'), renderLogEntry('ingest', `${sourceRel}（${writtenPages.length} 页落盘）`), 'utf8')
 
   // ---------- git 提交（一次 ingest 一次提交） ----------
@@ -258,6 +252,25 @@ export async function ingestSource(
 }
 
 // ---------- 工具函数 ----------
+
+/** 全量重建 index.md：扫描全库 wiki/entities + wiki/concepts 页面（title + 一句话摘要），
+ *  目录始终反映全库而非“最近一次消化”。sources 摘要页不进目录（对人不导航价值低）。 */
+async function renderFullIndex(kbRoot: string): Promise<string> {
+  const snap = await scanKb(kbRoot)
+  const entries: Array<{ page: string; summary: string; section: 'entities' | 'concepts' }> = []
+  for (const rel of snap.pages) {
+    const m = /^wiki\/(entities|concepts)\//.exec(rel)
+    if (!m) continue
+    const text = await readFile(path.join(kbRoot, rel), 'utf8')
+    const { fm, body } = parsePage(text)
+    entries.push({
+      page: (fm['title'] as string) ?? rel.split('/').pop()!.replace(/\.md$/, ''),
+      summary: firstSentence(body),
+      section: m[1] as 'entities' | 'concepts',
+    })
+  }
+  return renderIndex(entries)
+}
 
 async function buildContextMessages(deps: IngestDeps, sourceText: string): Promise<SimpleMessage[]> {
   // 上下文：来源全文 + index.md（记忆索引）

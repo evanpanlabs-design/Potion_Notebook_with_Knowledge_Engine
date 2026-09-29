@@ -27,10 +27,13 @@ export default function Review() {
   const refresh = useCallback(async () => {
     try {
       const r = await api.reviewQueue()
-      setQueue(r.queue)
+      // 返修中的页置顶：待返修 > 暂缓 > 普通（稳定排序，不改变同优先级内顺序）
+      const rank = (p) => (p.rework?.status === 'pending' ? 0 : p.rework?.status === 'deferred' ? 1 : 2)
+      const queue = [...r.queue].sort((a, b) => rank(a) - rank(b))
+      setQueue(queue)
       setReviewedCount(r.reviewedCount)
       setMaintenanceRunning(!!r.maintenanceRunning)
-      return r.queue
+      return queue
     } catch (e) {
       setError(`读取队列失败：${e.message}`)
       return []
@@ -52,8 +55,12 @@ export default function Review() {
     setBatchBusy(false)
   }, [refresh])
 
-  const reworkPool = queue.filter((p) => p.rework?.status === 'pending')
-  const deferredCount = queue.filter((p) => p.rework?.status === 'deferred').length
+  // v0.2.2 返修池：给过返修意见的条目（待返修 + 暂缓）整体挪进顶部池区块，
+  // 待审列表只陈列普通条目；池空时不渲染返修池区块（只看待审清单）
+  const pool = queue.filter((p) => p.rework)
+  const reworkPool = pool.filter((p) => p.rework.status === 'pending')
+  const deferredCount = pool.length - reworkPool.length
+  const plainQueue = queue.filter((p) => !p.rework)
 
   // 初次加载：取队列并选中第一项
   useEffect(() => {
@@ -138,34 +145,11 @@ export default function Review() {
   return (
     <div className="notes-shell">
       <aside className="notes-pane">
-        <div className="notes-pane-head">
-          <span className="pane-title">待审队列 · {queue.length}</span>
-        </div>
-        <div className="note-list">
-          {queue.length === 0 && <div className="review-empty">队列空了 —— AI 生成的页面都已过审 ✅</div>}
-          {queue.map((p) => (
-            <button
-              key={p.path}
-              className={`note-item ${sel?.path === p.path ? 'active' : ''}`}
-              onClick={() => setSel(p)}
-            >
-              <span className="note-title">
-                {p.title}
-                {p.rework && (
-                  <span className={`rework-tag ${p.rework.status === 'deferred' ? 'deferred' : ''}`}>
-                    💬 {p.rework.status === 'deferred' ? '暂缓' : '待返修'}
-                  </span>
-                )}
-              </span>
-              <span className="note-meta">{p.type} · {p.path}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* 返修池：攒意见 → 统一修复 */}
-        <div className="rework-pool">
-          <div className="rework-pool-head">
-            <span className="pane-title">返修池 · {reworkPool.length}</span>
+        {/* v0.2.3 侧栏 = 上下两个子栏：上栏返修池（无返修时不渲染），下栏待审核 */}
+        {pool.length > 0 && (
+        <div className="review-subpanel pool">
+          <div className="review-subpanel-head">
+            <span className="pane-title">返修池 · {pool.length}</span>
             <button
               className="btn btn-secondary btn-sm"
               disabled={batchBusy || reworkPool.length === 0 || maintenanceRunning}
@@ -185,8 +169,51 @@ export default function Review() {
           {deferredCount > 0 && !batchBusy && (
             <div className="rework-pool-hint">另有 {deferredCount} 条暂缓意见待修复结束后自动回流。</div>
           )}
-          <div className="notes-pane-foot">已过审 {reviewedCount} 页 · 机生页需人把关后才算正式知识</div>
+          <div className="rework-pool-list">
+            {pool.map((p) => (
+              <button
+                key={p.path}
+                className={`note-item ${sel?.path === p.path ? 'active' : ''}`}
+                onClick={() => setSel(p)}
+              >
+                <span className="note-title">
+                  {p.title}
+                  <span className={`rework-tag ${p.rework.status === 'deferred' ? 'deferred' : ''}`}>
+                    💬 {p.rework.status === 'deferred' ? '暂缓' : '待返修'}
+                  </span>
+                </span>
+                <span className="note-meta">{p.type} · {p.path}</span>
+              </button>
+            ))}
+          </div>
         </div>
+        )}
+
+        <div className="review-subpanel queue">
+          <div className="review-subpanel-head">
+            <span className="pane-title">待审核 · {plainQueue.length}</span>
+          </div>
+          <div className="note-list">
+            {queue.length === 0 && <div className="review-empty">队列空了 —— AI 生成的页面都已过审 ✅</div>}
+            {plainQueue.length === 0 && pool.length > 0 && (
+              <div className="review-empty" style={{ padding: '10px 12px', color: 'var(--c-text-3)', fontSize: '0.8125rem' }}>
+                其余条目都已给过返修意见，正在返修池中等统一修复。
+              </div>
+            )}
+            {plainQueue.map((p) => (
+              <button
+                key={p.path}
+                className={`note-item ${sel?.path === p.path ? 'active' : ''}`}
+                onClick={() => setSel(p)}
+              >
+                <span className="note-title">{p.title}</span>
+                <span className="note-meta">{p.type} · {p.path}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="notes-pane-foot">已过审 {reviewedCount} 页 · 机生页需人把关后才算正式知识</div>
       </aside>
 
       <section className="notes-main">

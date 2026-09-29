@@ -1,142 +1,111 @@
-import React, { useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
 import MarkdownHost from './MarkdownHost.jsx'
-import MiniGraph from '../MiniGraph.jsx'
 
-/** 提问页：问知识库 → 带引用回答，无依据明说（零幻觉承诺的 UI 面）。
- *  v0.2：回答完成后可展开「关联知识图谱」——引用页为种子 + 一跳邻居的局部子图。 */
+/**
+ * 问答历史（v0.2.2）：提问入口已改为右下角全局悬浮球（AskOrb），
+ * 本页只陈列归档的问答（wiki/queries/，30 天 TTL 到期自动遗忘）。
+ * 点开一条回看完整 Q&A（带引用 [[链接]] 可跳页面抽屉）。
+ */
 export default function Ask({ onOpenPage }) {
-  const [question, setQuestion] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [items, setItems] = useState(null)
+  const [detail, setDetail] = useState(null) // { item, content }
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [outcome, setOutcome] = useState(null)
-  const [subGraph, setSubGraph] = useState(null) // 局部子图数据 {nodes,edges,seeds}
-  const [subLoading, setSubLoading] = useState(false)
-  const [subError, setSubError] = useState('')
 
-  async function ask() {
-    if (!question.trim() || busy) return
+  const load = useCallback(async () => {
     setError('')
-    setOutcome(null)
-    setSubGraph(null)
-    setSubError('')
-    setBusy(true)
     try {
-      const r = await api.query(question.trim())
-      setOutcome(r)
+      const r = await api.queries()
+      setItems(r.queries)
     } catch (e) {
       setError(e.message)
+      setItems([])
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  async function openItem(item) {
+    if (detail?.item.path === item.path) {
+      setDetail(null)
+      return
+    }
+    setLoading(true)
+    setError('')
+    try {
+      const r = await api.page(item.path)
+      setDetail({ item, content: r.content })
+    } catch (e) {
+      setError(`读取问答失败：${e.message}`)
     } finally {
-      setBusy(false)
+      setLoading(false)
     }
   }
 
-  // 拉取问答涉及的局部子图（种子 = 命中页面路径）
-  async function loadSubGraph() {
-    if (subGraph || subLoading || !outcome?.citedPages?.length) return
-    setSubLoading(true)
-    setSubError('')
-    try {
-      const g = await api.graphSub(outcome.citedPages.map((p) => p.path))
-      setSubGraph(g)
-    } catch (e) {
-      setSubError(e.message)
-    } finally {
-      setSubLoading(false)
-    }
+  // 归档页正文已含 Q/A 结构（## Q / ## A），剥掉 frontmatter 直接渲染
+  const detailBody = detail ? detail.content.replace(/^---\n[\s\S]*?\n---\n/, '') : ''
+
+  // 剩余有效期（天）
+  const daysLeft = (expiresAt) => {
+    if (!expiresAt) return null
+    const t = Date.parse(expiresAt) - Date.now()
+    return Math.max(0, Math.ceil(t / 24 / 60 / 60 / 1000))
   }
 
   return (
     <div className="page">
-      <h1 className="page-title">提问</h1>
+      <h1 className="page-title">问答历史</h1>
       <p className="page-desc">
-        只依据你的知识库回答，并标注引用来源。库里没有依据的问题会直接告诉你——不编造。
+        你与知识库的问答记录都在这里（新在前）。提问入口在右下角的 ✦ 悬浮球——任何页面都能随手问。
+        记录保留 30 天后自动遗忘，避免一次性问答沉淀为永久知识。
       </p>
 
-      {error && <div className="banner banner-danger">查询失败：{error}</div>}
-
-      <div className="card">
-        <div className="field" style={{ marginBottom: 0 }}>
-          <label className="field-label" htmlFor="ask-input">你的问题</label>
-          <textarea
-            id="ask-input"
-            className="textarea"
-            style={{ minHeight: 72 }}
-            placeholder="如：知识复利的核心机制是什么？"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') ask()
-            }}
-          />
-        </div>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16 }}>
-          <button className="btn btn-primary" disabled={!question.trim() || busy} onClick={ask}>
-            {busy && <span className="spinner" style={{ borderTopColor: '#fff', borderColor: 'rgba(255,255,255,0.35)' }} />}
-            {busy ? '正在检索并回答…' : '提问'}
-          </button>
-          <span className="mono" style={{ color: 'var(--c-text-3)' }}>⌘/Ctrl + Enter</span>
-        </div>
-      </div>
-
-      {busy && (
-        <div className="loading-row" style={{ marginTop: 16 }}>
-          <span className="spinner" /> 词法匹配 → 图扩展 → 组装上下文 → 生成回答…
+      {error && <div className="banner banner-danger">{error}</div>}
+      {items === null && !error && (
+        <div className="loading-row">
+          <span className="spinner" /> 正在读取问答历史…
         </div>
       )}
 
-      {outcome && (
-        <>
-          {outcome.noEvidence ? (
-            <div className="banner banner-warning">
-              库内没有回答这个问题所需的依据。引擎不会编造——投喂相关素材后再来问。
-            </div>
-          ) : (
-            <div className="card">
-              <MarkdownHost text={outcome.answer} onOpenPage={onOpenPage} />
-            </div>
-          )}
+      {items?.length === 0 && (
+        <div className="empty-state">
+          还没有问答记录。点击右下角的
+          <span className="ask-orb-inline-hint">✦</span>
+          悬浮球向知识库提问，问答会自动归档到这里。
+        </div>
+      )}
 
-          {outcome.citedPages?.length > 0 && (
-            <div className="card">
-              <h3 style={{ fontFamily: 'var(--font-display)', margin: '0 0 12px', fontSize: '1rem' }}>
-                本次检索命中的页面
-              </h3>
-              <div className="cite-chips">
-                {outcome.citedPages.map((p) => (
-                  <button key={p.path} className="cite-chip" onClick={() => onOpenPage(p.path)}>
-                    {p.title.includes('/') ? p.title.split('/').pop().replace(/\.md$/, '') : p.title}
-                    <span className="score">{p.score?.toFixed?.(1) ?? p.score}</span>
-                  </button>
-                ))}
+      {items?.length > 0 && (
+        <div className="history-list">
+          {items.map((it) => {
+            const left = daysLeft(it.expiresAt)
+            const open = detail?.item.path === it.path
+            return (
+              <div key={it.path} className={`history-item card ${open ? 'open' : ''}`}>
+                <button className="history-head" onClick={() => openItem(it)}>
+                  <span className="history-q">{it.question || '(无问题文本)'}</span>
+                  <span className="history-meta mono">
+                    {it.createdAt.slice(0, 16).replace('T', ' ')}
+                    {left !== null && ` · 剩 ${left} 天`}
+                  </span>
+                </button>
+                {open && (
+                  <div className="history-body">
+                    {loading && !detail && (
+                      <div className="loading-row">
+                        <span className="spinner" /> 正在加载问答内容…
+                      </div>
+                    )}
+                    {detail && <MarkdownHost text={detailBody} onOpenPage={onOpenPage} />}
+                  </div>
+                )}
               </div>
-            </div>
-          )}
-
-          {/* 关联知识图谱：引用页为种子的局部子图（v0.2 第 5 条） */}
-          {outcome.citedPages?.length > 0 && !subGraph && (
-            <div className="subgraph-trigger">
-              <button className="btn btn-secondary" disabled={subLoading} onClick={loadSubGraph}>
-                {subLoading ? <span className="spinner" /> : '✦'} {subLoading ? '正在构建局部子图…' : '✦ 关联知识图谱'}
-              </button>
-              {subError && <span className="mono" style={{ color: 'var(--c-danger, #c66)' }}>加载失败：{subError}</span>}
-            </div>
-          )}
-          {subGraph && (
-            <div className="card">
-              <h3 style={{ fontFamily: 'var(--font-display)', margin: '0 0 8px', fontSize: '1rem' }}>
-                关联知识图谱 · 引用页 + 一跳邻居
-              </h3>
-              <MiniGraph data={subGraph} onOpenPage={onOpenPage} />
-            </div>
-          )}
-
-          {outcome.archivePath && (
-            <div className="mono" style={{ color: 'var(--c-text-3)', marginTop: 8 }}>
-              问答已归档：{outcome.archivePath}
-            </div>
-          )}
-        </>
+            )
+          })}
+        </div>
       )}
     </div>
   )
