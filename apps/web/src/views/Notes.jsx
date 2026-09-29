@@ -74,8 +74,9 @@ export default function Notes({ onOpenPage, stream }) {
   const savedRef = useRef('') // 已保存的完整落盘文本（dirty 判定基线）
 const wysInitRef = useRef(false) // wysiwyg 基线是否已随编辑器装配建立（remark 空行规范化会让首帧产物≠原文，需以首帧产物为基线，避免打开即误报 dirty）
 const wysPendingDirty = useRef(false) // 带改动切到 wysiwyg 时保持 dirty 标记（基线重建后由它恢复）
-  const hostRef = useRef(null)
-  const viewRef = useRef(null)
+const hostRef = useRef(null)
+const viewRef = useRef(null)
+const milkActionsRef = useRef(null) // Milkdown 命令句柄（插入表格等），由 MilkdownEditor 装配后填充
   const pagesRef = useRef([])
 
 
@@ -535,6 +536,19 @@ const wysPendingDirty = useRef(false) // 带改动切到 wysiwyg 时保持 dirty
                     源码
                   </button>
                 </div>
+                {editMode === 'wysiwyg' && (
+                  <button
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => {
+                      if (!milkActionsRef.current?.insertTable?.()) {
+                        setMessage('编辑器尚未就绪，稍候再试')
+                      }
+                    }}
+                    title="在光标处插入 3×3 表格（GFM）"
+                  >
+                    表格
+                  </button>
+                )}
                 {editMode === 'wysiwyg' && fmText != null && (
                   <button
                     className="btn btn-sm btn-secondary"
@@ -579,6 +593,7 @@ const wysPendingDirty = useRef(false) // 带改动切到 wysiwyg 时保持 dirty
                   pages={[...graphPages, ...notes.map((n) => ({ title: n.title }))].map((p) => ({ title: p.title }))}
                   onOpenTitle={(path) => onOpenPage?.(path)}
                   onMarkdown={setEditorMd}
+                  actionRef={milkActionsRef}
                 />
               </div>
             ) : null}

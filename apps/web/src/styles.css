@@ -928,6 +928,72 @@ span.wikilink {
 }
 .milk-editor span.wikilink:hover .wl-edit { display: inline; }
 
+/* 富文本排版补齐：Milkdown 只装了行为层（commonmark/gfm），无内置主题，
+   代码块/引用/表格会渲染成裸文本肉眼看不出，按应用设计语言补样式 */
+.milk-editor pre {
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  margin: 0.8em 0;
+  white-space: pre;
+}
+.milk-editor pre code { background: none; border: none; padding: 0; font-size: inherit; border-radius: 0; }
+.milk-editor code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  padding: 1px 5px;
+}
+.milk-editor blockquote {
+  border-left: 3px solid var(--c-primary);
+  background: var(--c-primary-soft);
+  margin: 0.8em 0;
+  padding: 6px 14px;
+  color: var(--c-text-2);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+}
+.milk-editor blockquote p { margin: 0.35em 0; }
+.milk-editor table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  min-width: 240px;
+}
+.milk-editor th, .milk-editor td {
+  border: 1px solid var(--c-border-strong);
+  padding: 6px 12px;
+  font-size: 0.9em;
+  min-width: 72px;
+}
+.milk-editor th { background: var(--c-bg); font-weight: 700; text-align: left; }
+.milk-editor .selectedCell { outline: 2px solid var(--c-primary); outline-offset: -2px; }
+.milk-editor hr { border: none; border-top: 1px solid var(--c-border-strong); margin: 1.4em 0; }
+.milk-editor del { color: var(--c-text-3); }
+.milk-editor ul, .milk-editor ol { padding-left: 1.6em; }
+
+/* 表格浮动工具栏：光标进入表格时出现在表格上缘（fixed 定位，滚动/窗口变化重算） */
+.table-toolbar { position: fixed; z-index: 90; display: flex; align-items: center; flex-wrap: wrap; gap: 1px; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-md); box-shadow: var(--shadow-pop); padding: 3px 6px; max-width: calc(100vw - 16px); }
+.table-toolbar button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 7px;
+  border-radius: var(--r-sm);
+  color: var(--c-text-2);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.table-toolbar button:hover { background: var(--c-bg); color: var(--c-text); }
+.table-toolbar button.tt-danger:hover { background: var(--c-danger-soft); color: var(--c-danger); }
+.table-toolbar .tt-sep { width: 1px; height: 14px; background: var(--c-border); margin: 0 4px; }
+
 /* [[ 补全弹窗（z-index 高于抽屉） */
 .wl-suggest {
   position: fixed;
