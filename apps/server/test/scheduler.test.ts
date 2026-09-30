@@ -3,15 +3,14 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 import { startScheduler, type TaskRunner } from '../src/scheduler.ts'
 
-const here = path.dirname(fileURLToPath(import.meta.url))
-
-/** 场景脚手架：临时 data 目录 + 记录调用的 fake runner + 大扫描间隔（不干扰手动 sweep） */
+/** 场景脚手架：临时 data/kb 目录 + 记录调用的 fake runner + 大扫描间隔（不干扰手动 sweep）
+ *  kbRoot 必须也用临时目录——skipped 路径会往 kbRoot/bulletins/ 发 AI 便利贴 */
 async function makeFixture(runner?: TaskRunner) {
   const dataRoot = await mkdtemp(path.join(tmpdir(), 'ke-sched-'))
+  const kbRoot = await mkdtemp(path.join(tmpdir(), 'ke-schedkb-'))
   const calls: { id: string; manual: boolean }[] = []
   const r: TaskRunner =
     runner ??
@@ -21,11 +20,11 @@ async function makeFixture(runner?: TaskRunner) {
     })
   const scheduler = startScheduler({
     dataRoot,
-    kbRoot: here,
+    kbRoot,
     runners: new Map([['digest', r]]),
     scanMs: 60 * 60 * 1000, // 1 小时：测试期间 interval 不会自己触发
   })
-  return { dataRoot, calls, scheduler }
+  return { dataRoot, kbRoot, calls, scheduler }
 }
 
 /** 直接把任务（数组或单条）写进 tasks.json（模拟历史遗留状态），绕过 create() */
@@ -201,7 +200,7 @@ test('create 落盘 tasks.json 且恢复持久化任务（跨“重启”）', a
   const calls2: string[] = []
   const scheduler2 = startScheduler({
     dataRoot,
-    kbRoot: here,
+    kbRoot: dataRoot, // 重启场景下 kbRoot 无关紧要（不会触发 skipped 发帖）
     runners: new Map([['digest', async (t) => { calls2.push(t.id); return {} }]]),
     scanMs: 60 * 60 * 1000,
   })
