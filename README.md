@@ -50,8 +50,14 @@ LLM_MODEL_QUERY=gpt-4o          # 问答用（可选）
 | 提问 | 悬浮球随手问（任意页面右下角），级联检索（词法 + 图扩展）→ 生成带引用的回答并标注相关度；无依据时明说，不编造；回答后可展开**关联知识图谱**局部子图并可导出图片 |
 | 问答历史 | 与知识库的全部问答记录（新在前），回答带引用标注与局部图谱；记录保留 30 天后自动遗忘，避免一次性问答沉淀为永久知识 |
 | 审核 | AI 生成页默认待审：通过 / 驳回删除 / **💬 返修附意见**；返修池支持「⚙ 统一修复」批量执行，运行期间新意见自动暂缓进池 |
-| 知识图谱 | 实体 / 概念 / 笔记 / 问答的 wikilink 关系网络，支持缩放平移与布局参数调节，点击节点侧栏查看页面内容与反向链接 |
-| 总览 | 库状态、`log.md` 操作流水时间线（ingest / query / edit / sync / rework…）、index 目录 |
+| 知识图谱 | 实体 / 概念 / 笔记 / 问答的 wikilink 关系网络，支持缩放平移与布局参数调节，点击节点侧栏查看页面内容与反向链接；**🩺 图谱自检**：孤立页 / 重复页 / 枢纽页 / 无内容支撑连线四类嫌疑检查，AI 建议写入页面 suggestions 待人工审核 |
+| Agent 问答 | 悬浮球提问可选多步 agent 模式：模型按需调用只读工具（search_kb / read_page / list_neighbors / web_search）多步探索后综合回答；上下文超预算自动压缩（复用 pi-agent-core compaction） |
+| 定时任务 | 自然语言建任务（「每天早上七点搜 AI 资讯」）：Tavily 搜索 → 证据页物化 → LLM 综合日报落收件箱；停机错过 <24h 自动补做，≥24h 放弃并通知；任务前自动注入用户指令 |
+| 收件箱 | 定时日报的收件层：未读蓝点、原文预览、LLM 综合快报；一键「消化进图谱」把证据页交给 ingest 管线（闸门/幂等/待审全沿用） |
+| 便利贴 | 用户与 AI 的异步对话面板：指令贴（定时任务执行前自动读取生效）、待办、留言；AI 会发帖（任务跳过通知等）；7 天保质期过期归档不删除，可回复跟帖/完成/放弃 |
+| 建议 | 页面级 suggestions[] 双源同池：audit 自动建议与用户留言共存 frontmatter，审核页一键「转返修」或「留建议」，返修池统一执行 |
+| 工作台 | agent 任务过程留痕：每条多步问答按「背景目标 → 探索链路 → 执行链路 → 结果迭代」四节结构落盘，时间线可回放 |
+| 总览 | 库状态、`log.md` 操作流水时间线（ingest / query / edit / sync / rework / task / bulletin / digest / audit…）、index 目录、定时任务卡片 |
 
 ![文档工作台：笔记编辑 + 消化状态](docs/demo/screenshots/v026-notes-editor.png)
 
@@ -87,16 +93,20 @@ LLM_MODEL_QUERY=gpt-4o          # 问答用（可选）
 
 两段式 ingest（ARCHITECTURE §6.2）：**Phase 1 analyze** 将素材分析为结构化 JSON（实体 / 概念 / claims，带出处 locus）→ **Phase 2 generate** 逐页生成结构化正文（实体页：概述/关键事实/关系网络/来源；概念页：定义/机制/相关概念/常见误区）→ **闸门校验链**（命名 / 重复 / 标签词表 / 路径越界）→ 落盘 → git 提交。闸门是唯一写通道，AI 没有绕过它的路径。
 
+v0.3 Agent 化（[ADR-003](docs/ADR-003-v0.3.md)）：agent loop（工具白名单只读围栏 + 轮次上限 + 轨迹留痕）+ 自建轻量 scheduler（tasks.json 落盘 + 内存扫描 + 启动补偿）+ 图谱自检管线 + bulletin board + workbench 轨迹 + 上下文压缩（复用 pi-agent-core 纯函数，摘要走自有 LLM 路由边界）。MCP / 代码执行 / 工具生产推迟 v0.4+。
+
 ![知识图谱：wikilink 网络 + 节点侧栏（内容 / 反向链接）](docs/demo/screenshots/v026-graph.png)
 
 ## 工程实践
 
 - **Monorepo**（npm workspaces）：`packages/core`（闸门、索引、日志、schema）、`packages/agent-tools`（LLM 路由 + RPM 门控 + OpenAI/Anthropic 双协议）、`apps/server`、`apps/web`
 - **TypeScript 严格模式** + TypeBox schema 校验 LLM 输出（不合 schema 自动回喂修复一轮）
-- **测试**：`npm test`（node:test，41 用例覆盖闸门校验链、索引重建、日志解析等核心纯函数）
+- **测试**：`npm test`（node:test，118 用例：闸门校验链、调度语义、agent loop、compaction、audit、bulletin、workbench、e2e 全链路等）
 - **韧性**：LLM 429 按 3s/8s/15s 退避重试；重复投喂同一来源按 sha256 幂等跳过
 - **审计**：`log.md` 记录每次 ingest/query/note/edit/sync/review/rework，前端时间线可视化
 - **SSE 显化**：LLM 流式 token、管道阶段、耗时指标经 `/api/events` 实时推送，无黑盒等待
+- **agent 围栏**：工具白名单（只读）+ 轮次上限 + 每次任务四节轨迹落盘（workbench）；上下文超预算自动压缩，摘要失败降级不压（压缩不能杀死任务）
+- **溯源守门**：联网搜索结果必须先物化为 sources/ 证据页才可被 wiki 引用；无据补链自动降级为备注说明
 
 ![审核：三处置 + 返修意见](docs/demo/screenshots/v026-review.png)
 
