@@ -22,8 +22,6 @@ export default function Review() {
   const [reworkNote, setReworkNote] = useState('')
   // v0.3 D6-7：选中页的 suggestions（audit 维护建议展示）
   const [suggestions, setSuggestions] = useState([])
-  // D8-9：留建议输入与提交状态
-  const [sugDraft, setSugDraft] = useState('')
   const [sugBusy, setSugBusy] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchInfo, setBatchInfo] = useState(null) // {running, processing, done}
@@ -114,7 +112,6 @@ export default function Review() {
           }
         }
         setSuggestions(sug)
-        setSugDraft('')
       })
       .catch((e) => alive && setError(`读取页面失败：${e.message}`))
       .finally(() => alive && setLoading(false))
@@ -123,14 +120,15 @@ export default function Review() {
     }
   }, [sel])
 
-  // D8-9：提交/撤除用户建议
-  async function submitSuggestion() {
-    if (!sel || sugBusy || !sugDraft.trim()) return
+  // D8-9：提交/撤除用户建议（意见统一走 reworkNote 文本框，留言/返修二选一）
+  async function submitSuggestion(text) {
+    const note = (text ?? '').trim()
+    if (!sel || sugBusy || !note) return
     setSugBusy(true)
     try {
-      const r = await api.addSuggestion(sel.path, sugDraft.trim())
+      const r = await api.addSuggestion(sel.path, note)
       setSuggestions(r.suggestions ?? [])
-      setSugDraft('')
+      setReworkNote('')
       setFlash('建议已记录：下一轮统一修复会带上它')
       setTimeout(() => setFlash(''), 3000)
     } catch (e) {
@@ -310,13 +308,17 @@ export default function Review() {
                 <MarkdownHost text={stripFm} onOpenPage={() => {}} />
               )}
             </div>
-            {/* v0.3 D6-7 + D8-9：维护建议（audit 自检建议 + 用户留的建议）同池展示 */}
+            {/* v0.3 D6-7 + D8-9 合并：维护建议与返修共用一个意见区。
+                留言 = 仅记录到页面 suggestions[]（不改状态）；
+                提交返修 = 意见进返修池，攒一批后「统一修复」让 LLM 集中执行。 */}
             <div className="audit-suggestions">
-              <div className="audit-suggestions-label">
-                维护建议（图谱自检的 AI 建议 + 你留的意见；「转返修」交给 LLM 执行，或留给下一轮统一修复）
+              <div className="audit-suggestions-label">维护建议与返修</div>
+              <div className="audit-sug-sub">
+                AI 自检建议与你的意见在同一条池子里。写下意见后二选一：
+                <b>留言</b>＝仅记录到页面；<b>提交返修</b>＝把页面放进返修池，攒一批后「统一修复」由 LLM 集中执行。
               </div>
               {suggestions.length === 0 && (
-                <div className="audit-sug-empty mono">暂无建议——AI 自检（图谱页「🩺 图谱自检」）或下方直接留言</div>
+                <div className="audit-sug-empty mono">暂无建议——图谱页可跑「🩺 图谱自检」，或在下方写下第一条</div>
               )}
               {suggestions.map((s, i) => (
                 <div key={i} className="audit-suggestion-item">
@@ -325,7 +327,7 @@ export default function Review() {
                   {s.action && <span className="audit-sug-action">{s.action}</span>}
                   <button
                     className="btn btn-ghost btn-sm"
-                    title="把这条建议转成返修意见，交给 LLM 集中执行"
+                    title="把这条建议填入下方意见框，随返修交给 LLM 集中执行"
                     onClick={() => setReworkNote((n) => (n ? `${n}\n${s.note}` : s.note))}
                   >
                     转返修
@@ -340,44 +342,35 @@ export default function Review() {
                   </button>
                 </div>
               ))}
-              <div className="audit-sug-form">
-                <input
-                  className="input"
-                  placeholder="给这个页面留一条维护建议，如：补充与[[卡片盒笔记法]]的关联；这段过时了请联网更新"
-                  value={sugDraft}
-                  onChange={(e) => setSugDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') submitSuggestion()
-                  }}
-                />
-                <button className="btn btn-secondary btn-sm" disabled={sugBusy || !sugDraft.trim()} onClick={submitSuggestion}>
-                  {sugBusy ? '提交中…' : '留言'}
-                </button>
-              </div>
-            </div>
-            {/* 返修意见区：提交进池 / 已有意见回显 */}
-            <div className="rework-form">
-              <label className="field-label" htmlFor="rework-note">返修意见（驳回之外的柔性处置：说明哪里要改，攒一批后统一让 LLM 修复）</label>
               <textarea
-                id="rework-note"
                 className="textarea"
-                style={{ minHeight: 64 }}
-                placeholder="如：第二段与来源不符，请核对原文；补充 [[相关概念]] 链接。"
+                style={{ minHeight: 60 }}
+                placeholder="给这个页面写维护建议或返修意见，如：补充与[[卡片盒笔记法]]的关联；第二段与来源不符请核对。"
                 value={reworkNote}
                 onChange={(e) => setReworkNote(e.target.value)}
               />
               <div className="rework-form-foot">
                 {sel.rework && (
                   <span className="mono rework-status">
-                    已在池中（{sel.rework.status === 'deferred' ? '暂缓进池' : '待修复'} · {sel.rework.at?.slice(0, 10)}）
+                    已在返修池（{sel.rework.status === 'deferred' ? '暂缓进池' : '待修复'} · {sel.rework.at?.slice(0, 10)}）
                   </span>
                 )}
+                <span style={{ flex: 1 }} />
                 <button
-                  className="btn btn-secondary"
+                  className="btn btn-secondary btn-sm"
+                  disabled={sugBusy || !reworkNote.trim()}
+                  title="仅把意见记录到页面（suggestions），不改变页面状态"
+                  onClick={() => submitSuggestion(reworkNote.trim())}
+                >
+                  {sugBusy ? '提交中…' : '留言'}
+                </button>
+                <button
+                  className="btn btn-primary btn-sm"
                   disabled={busy || !reworkNote.trim()}
+                  title="记录意见并进返修池，攒批后「统一修复」让 LLM 执行"
                   onClick={() => act('rework', reworkNote.trim())}
                 >
-                  💬 {sel.rework ? '更新返修意见' : '提交返修'}
+                  💬 {sel.rework ? '更新返修' : '提交返修'}
                 </button>
               </div>
             </div>

@@ -667,9 +667,10 @@ app.get('/api/v1/inbox/*', async (req, reply) => {
   return item
 })
 
-/** 消化进图谱：证据页走既有 ingest 管线（闸门/幂等/待审全部沿用） */
-app.post('/api/v1/inbox/*/digest', async (req, reply) => {
-  const rel = `inbox/${(req.params as { '*': string })['*']}`
+/** 消化进图谱：证据页走既有 ingest 管线（闸门/幂等/待审全部沿用）
+ *  注意：find-my-way 9 要求通配符必须位于路由末尾，此处 rel 为单段文件名（收件箱平铺、无子目录），用 :rel 参数 */
+app.post('/api/v1/inbox/:rel/digest', async (req, reply) => {
+  const rel = `inbox/${(req.params as { rel: string }).rel}`
   try {
     const routing = await llmRouting()
     const outcome = await digestInboxItem({ kbRoot: KB_ROOT, routing }, rel)
@@ -744,7 +745,9 @@ interface UserSuggestionBody {
   note?: string
 }
 
-app.get('/api/v1/pages/*/suggestions', async (req, reply) => {
+// 注意：find-my-way 9 要求通配符必须位于路由末尾，页面 rel 含斜杠，
+// 故把 /suggestions 后缀挪进通配符：/api/v1/suggestions/<pageRel>，index 用 query 传递
+app.get('/api/v1/suggestions/*', async (req, reply) => {
   const rel = (req.params as { '*': string })['*']
   try {
     return { suggestions: await readSuggestions(KB_ROOT, rel) }
@@ -753,7 +756,7 @@ app.get('/api/v1/pages/*/suggestions', async (req, reply) => {
   }
 })
 
-app.post('/api/v1/pages/*/suggestions', async (req, reply) => {
+app.post('/api/v1/suggestions/*', async (req, reply) => {
   const rel = (req.params as { '*': string })['*']
   const body = req.body as UserSuggestionBody
   try {
@@ -767,9 +770,9 @@ app.post('/api/v1/pages/*/suggestions', async (req, reply) => {
   }
 })
 
-app.delete('/api/v1/pages/*/suggestions/:index', async (req, reply) => {
-  const rel = (req.params as { '*': string; index: string })['*']
-  const index = Number((req.params as { index: string }).index)
+app.delete('/api/v1/suggestions/*', async (req, reply) => {
+  const rel = (req.params as { '*': string })['*']
+  const index = Number((req.query as { index?: string }).index)
   try {
     const suggestions = await removeSuggestion(KB_ROOT, rel, index)
     return { suggestions }
@@ -1157,11 +1160,14 @@ async function listWikiPages() {
 }
 
 /** 审核队列：reviewed !== true 的 AI 生成页（wiki/ 全部机生，notes/ 不在内）。
+ *  问答沉淀（type: query）是带 expires_at 的一次性记录（30 天自动遗忘），
+ *  不属于机生知识页，不进人工审核队列——否则每次问答都制造一条待审噪声。
  *  v0.2：queue 内含 rework 字段；另回传 maintenanceRunning 供前端暂停进池提示。 */
 app.get('/api/v1/review-queue', async () => {
   const all = await listWikiPages()
+  const queue = all.filter((p) => !p.reviewed && p.type !== 'query')
   return {
-    queue: all.filter((p) => !p.reviewed),
+    queue,
     reviewedCount: all.length - all.filter((p) => !p.reviewed).length,
     maintenanceRunning: getReworkState().running,
   }

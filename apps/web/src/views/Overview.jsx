@@ -167,6 +167,9 @@ function TaskList({ tasks, busy, onToggle, onRun, onDelete }) {
                   </span>
                 )}
               </div>
+              {t.lastOutcome === 'error' && t.lastNote && (
+                <div className="task-error-note">⚠ {t.lastNote}</div>
+              )}
               {t.lastArtifact && <div className="mono task-artifact">产出 {t.lastArtifact}</div>}
             </div>
             <div className="task-actions">

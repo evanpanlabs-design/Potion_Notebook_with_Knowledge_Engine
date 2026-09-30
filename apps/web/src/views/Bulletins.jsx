@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 
 /**
@@ -8,12 +8,64 @@ import { api } from '../api.js'
  * - 保质期：过期自动转 dropped 归档不删除
  * - 状态流转：open → done / dropped；回复进 thread 并转 replied
  */
-const KIND_LABEL = { directive: '指令', todo: '待办', request: 'AI 求助', note: '留言' }
-const KIND_HINT = {
-  directive: '会在每次定时任务执行前注入（如「日报主题改成财经」）',
-  todo: '给自己的提醒',
-  request: 'AI 向你要东西（如换 Tavily key）',
-  note: '普通留言',
+const KIND_META = {
+  directive: { label: '指令', icon: '⚡', desc: '定时任务执行前自动读取，如：明天日报主题改成财经' },
+  todo: { label: '待办', icon: '☑️', desc: '给自己的提醒，做完打 ✓ 归档' },
+  request: { label: 'AI 求助', icon: '🙋', desc: 'AI 向你要东西（如换 Tavily key），回复它即可' },
+  note: { label: '留言', icon: '💬', desc: '普通记录与备忘，AI 与你都能看到' },
+}
+const KIND_OPTIONS = ['directive', 'todo', 'note']
+
+/** 自定义 kind 下拉：展示图标+说明，替代原生 select */
+function KindSelect({ value, onChange }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const close = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+  const cur = KIND_META[value]
+  return (
+    <div className={`kind-select${open ? ' open' : ''}`} ref={ref}>
+      <button
+        type="button"
+        className="kind-select-btn"
+        title={cur.desc}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="kind-icon">{cur.icon}</span>
+        <span>{cur.label}</span>
+        <span className="kind-caret">▾</span>
+      </button>
+      {open && (
+        <div className="kind-menu" role="listbox">
+          {KIND_OPTIONS.map((k) => (
+            <button
+              type="button"
+              key={k}
+              role="option"
+              aria-selected={k === value}
+              className={`kind-option${k === value ? ' active' : ''}`}
+              onClick={() => {
+                onChange(k)
+                setOpen(false)
+              }}
+            >
+              <span className="kind-icon">{KIND_META[k].icon}</span>
+              <span className="kind-option-body">
+                <span className="kind-option-label">{KIND_META[k].label}</span>
+                <span className="kind-option-desc">{KIND_META[k].desc}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function Bulletins() {
@@ -96,15 +148,17 @@ export default function Bulletins() {
       {/* ---- 发帖 ---- */}
       <div className="card bulletin-compose">
         <div className="bulletin-compose-row">
-          <select className="input" style={{ width: 110 }} value={kind} onChange={(e) => setKind(e.target.value)} title={KIND_HINT[kind]}>
-            <option value="directive">指令</option>
-            <option value="todo">待办</option>
-            <option value="note">留言</option>
-          </select>
+          <KindSelect value={kind} onChange={setKind} />
           <input
             className="input"
             style={{ flex: 1 }}
-            placeholder={kind === 'directive' ? '如：明天日报主题改成财经；日报加上 OpenAI 动态' : '写点什么…'}
+            placeholder={
+              kind === 'directive'
+                ? '如：明天日报主题改成财经；日报加上 OpenAI 动态'
+                : kind === 'todo'
+                  ? '如：核对一下知识图谱里的孤立节点'
+                  : '写点什么…'
+            }
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -115,7 +169,9 @@ export default function Bulletins() {
             {busy ? '…' : '贴上'}
           </button>
         </div>
-        <div className="mono bulletin-kind-hint">{KIND_HINT[kind]} · 7 天保质期</div>
+        <div className="mono bulletin-kind-hint">
+          {KIND_META[kind].desc} · 7 天保质期
+        </div>
       </div>
 
       {items === null && !error && (
@@ -159,7 +215,7 @@ function BulletinCard({ b, busy, archivedView, replyDraft = '', onReplyDraft, on
     <div className={`bulletin-card author-${b.author} ${expired ? 'expired' : ''}`}>
       <div className="bulletin-card-head">
         <span className="bulletin-author">{b.author === 'ai' ? '🤖 AI' : '👤 我'}</span>
-        <span className={`bulletin-kind kind-${b.kind}`}>{KIND_LABEL[b.kind] ?? b.kind}</span>
+        <span className={`bulletin-kind kind-${b.kind}`}>{KIND_META[b.kind]?.icon} {KIND_META[b.kind]?.label ?? b.kind}</span>
         {b.status === 'replied' && <span className="bulletin-status st-replied">已回复</span>}
         {expired && <span className="bulletin-status st-dropped">已过期</span>}
         {b.status === 'done' && <span className="bulletin-status st-done">已完成</span>}

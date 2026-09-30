@@ -70,9 +70,9 @@ export const api = {
   startAudit: () => post('/api/graph/audit', {}),
   auditStatus: () => j('/api/graph/audit/status'),
   auditSuggestions: () => j('/api/graph/suggestions'),
-  pageSuggestions: (rel) => j(`/api/pages/${rel}/suggestions`),
-  addSuggestion: (rel, note) => post(`/api/pages/${rel}/suggestions`, { note }),
-  removeSuggestion: (rel, index) => j(`/api/pages/${rel}/suggestions/${index}`, { method: 'DELETE' }),
+  pageSuggestions: (rel) => j(`/api/suggestions/${rel}`),
+  addSuggestion: (rel, note) => post(`/api/suggestions/${rel}`, { note }),
+  removeSuggestion: (rel, index) => j(`/api/suggestions/${rel}?index=${index}`, { method: 'DELETE' }),
   // ---- v0.3 · bulletin board 便利贴（ADR-003 D10-11） ----
   listBulletins: () => j('/api/bulletins'),
   createBulletin: (text, kind = 'note', ttlDays = 7) => post('/api/bulletins', { text, kind, ttlDays }),
