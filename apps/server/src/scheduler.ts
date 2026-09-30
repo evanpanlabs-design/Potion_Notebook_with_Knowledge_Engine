@@ -19,6 +19,7 @@ import {
   type TaskRunRecord,
   type TaskSchedule,
 } from '@ke/core'
+import { createBulletin } from './bulletin.ts'
 
 /** 任务的运行器：kind → 执行体。D2-3 注册 digest（Tavily → inbox 原始快报）；D4-5 升级为 LLM 综合版 */
 export type TaskRunner = (task: ScheduledTask, ctx: { manual: boolean }) => Promise<{ note?: string; artifact?: string }>
@@ -199,7 +200,17 @@ export function startScheduler(deps: SchedulerDeps): SchedulerHandle {
       const action = decideCatchup(due, now.getTime())
       if (action === 'skip') {
         // 放弃本轮：只推进 nextDue + 记一条 skipped（产物无副作用）
-        // TODO(D10-11)：在 bulletin board 发一张 AI 便利贴告知用户本轮已跳过
+        // D10-11：发一张 AI 便利贴告知用户本轮已跳过（可手动补跑）
+        try {
+          await createBulletin(kbRoot, {
+            author: 'ai',
+            kind: 'note',
+            text: `⏰ 定时任务「${t.title}」（${describeScheduleSafe(t.schedule)}）本轮已跳过：服务未运行错过 ${Math.round((now.getTime() - due) / 3600_000)} 小时（≥24h 放弃）。可到「总览 → 定时任务」手动运行补一次。`,
+            ttlDays: 3,
+          })
+          // 通知事件（收件箱角标类 UI 后续消费）
+          events.emit('bulletin:created', { task: t.id, title: t.title })
+        } catch { /* 发帖失败不影响调度主流程 */ }
         const nextDue = computeNextDue(t.schedule, now, new Date(t.createdAt)).toISOString()
         const rec: TaskRunRecord = {
           startedAt: t.nextDue,
@@ -245,5 +256,14 @@ export function startScheduler(deps: SchedulerDeps): SchedulerHandle {
       }
     },
     sweepOnce,
+  }
+}
+
+/** 排程描述兜底（bulletin 发帖文案用，失败不致命） */
+function describeScheduleSafe(schedule: TaskSchedule): string {
+  try {
+    return schedule.type === 'daily' ? `每天 ${schedule.at}` : `每 ${schedule.hours} 小时`
+  } catch {
+    return '（排程未知）'
   }
 }

@@ -7,6 +7,7 @@ import Notes from './views/Notes.jsx'
 import Sources from './views/Sources.jsx'
 import Graph from './views/Graph.jsx'
 import Inbox from './views/Inbox.jsx'
+import Bulletins from './views/Bulletins.jsx'
 import Review from './views/Review.jsx'
 import Settings from './views/Settings.jsx'
 import AskOrb from './AskOrb.jsx'
@@ -24,6 +25,7 @@ const NAV = [
   { id: 'sources', iconKey: 'sources', icon: '▤', label: '素材' },
   { id: 'graph', iconKey: 'graph', icon: '⟡', label: '知识图谱' },
   { id: 'inbox', iconKey: 'inbox', icon: '✉', label: '收件箱' },
+  { id: 'bulletins', iconKey: 'bulletins', icon: '📌', label: '便利贴' },
   { id: 'review', iconKey: 'review', icon: '☑', label: '审核' },
   { id: 'ask', iconKey: 'ask', icon: '◎', label: '问答历史' },
   { id: 'settings', iconKey: 'settings', icon: '⚙', label: '设置' },
@@ -222,7 +224,7 @@ export default function App() {
           ))}
         </div>
         <EngineStatus stream={stream} open={engineOpen} onToggle={() => setEngineOpen((o) => !o)} />
-        <div className="sidebar-footer">local-first · v0.1</div>
+        <div className="sidebar-footer">local-first · v0.3</div>
       </nav>
       <main className="main">
         {view === 'overview' && <Overview onOpenPage={openPage} go={switchView} />}
@@ -231,6 +233,7 @@ export default function App() {
 {view === 'sources' && <Sources onOpenPage={openPage} go={switchView} stream={stream} />}
         {view === 'graph' && <Graph onOpenPage={openPage} go={switchView} />}
         {view === 'inbox' && <Inbox onOpenPage={openPage} go={switchView} />}
+        {view === 'bulletins' && <Bulletins />}
         {view === 'review' && <Review />}
         {view === 'settings' && <Settings />}
       </main>

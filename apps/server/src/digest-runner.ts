@@ -20,6 +20,7 @@ import type { SimpleMessage } from '@ke/agent-tools'
 import { createTavilyClient } from '@ke/agent-tools'
 import { resolveTavilyConfig, bumpTavilyUsage, TAVILY_MONTHLY_LIMIT } from './agent-tools.ts'
 import { callLlmJson, gitCommitAll } from './ingest-pipeline.ts'
+import { activeDirectives, renderDirectives } from './bulletin.ts'
 import type { TaskRunner } from './scheduler.ts'
 
 /** LLM 综合输出的 schema（宽松：字段缺失就降级原始快报） */
@@ -71,6 +72,9 @@ export function createDigestRunner(deps: DigestRunnerDeps): TaskRunner {
       throw new Error(`Tavily 月度额度已用尽（${used}/${TAVILY_MONTHLY_LIMIT}）`)
     }
 
+    // D10-11：任务前注入 open 未过期 directive（「明天日报主题改成财经」由此生效）
+    const directiveText = renderDirectives(await activeDirectives(kbRoot))
+
     // 搜索词：任务自定义 query 优先；缺省「<主题> 最新 资讯」（Tavily topic=news 已限新闻域）
     const query = task.query?.trim() || `${task.topic} 最新资讯 今日`
     const client = createTavilyClient(cfg.apiKey)
@@ -100,11 +104,14 @@ export function createDigestRunner(deps: DigestRunnerDeps): TaskRunner {
     if (deps.routing && r.hits.length > 0) {
       try {
         const feed = r.hits.map((h, i) => `【${i + 1}】${h.title || '(无标题)'}\nURL: ${h.url}\n摘要：${h.content}`).join('\n\n')
+        const userPayload = directiveText
+          ? `主题：${task.topic}\n日期：${date}\n\n用户指令（优先服从）：\n${directiveText}\n\n搜索结果：\n${feed}`
+          : `主题：${task.topic}\n日期：${date}\n\n搜索结果：\n${feed}`
         const res = await callLlmJson<DigestReportT>(
           deps.routing as never,
           'ingest',
           DIGEST_PROMPT,
-          [{ role: 'user', text: `主题：${task.topic}\n日期：${date}\n\n搜索结果：\n${feed}` }],
+          [{ role: 'user', text: userPayload }],
           DigestReport,
         )
         report = res.report

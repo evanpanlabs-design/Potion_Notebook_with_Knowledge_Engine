@@ -24,6 +24,7 @@ import { createDigestRunner } from './digest-runner.ts'
 import { listInbox, readInboxItem, digestInboxItem } from './inbox.ts'
 import { runAudit, getAuditState } from './audit-pipeline.ts'
 import { addUserSuggestion, removeSuggestion, readSuggestions } from './suggest.ts'
+import { listBulletins, createBulletin, setBulletinStatus, replyBulletin } from './bulletin.ts'
 import {
   readMineruKey, writeMineruKey, maskMineruKey, checkUploadQuota,
   testMineruConnectivity, uploadFilesToMineru, pollBatchResults, fetchMarkdownFromZip,
@@ -776,6 +777,59 @@ app.delete('/api/v1/pages/*/suggestions/:index', async (req, reply) => {
   }
 })
 
+// ---------- D10-11：bulletin board（用户与 AI 异步交互便利贴） ----------
+
+app.get('/api/v1/bulletins', async () => {
+  return { bulletins: await listBulletins(KB_ROOT) }
+})
+
+interface BulletinBody {
+  text?: string
+  kind?: 'directive' | 'todo' | 'request' | 'note'
+  ttlDays?: number
+}
+
+app.post('/api/v1/bulletins', async (req, reply) => {
+  const body = req.body as BulletinBody
+  try {
+    const b = await createBulletin(KB_ROOT, {
+      author: 'user',
+      kind: body?.kind ?? 'note',
+      text: String(body?.text ?? ''),
+      ttlDays: typeof body?.ttlDays === 'number' ? body.ttlDays : 7,
+    })
+    const title = b.text.slice(0, 40)
+    await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('bulletin', `留言 ${title}`), 'utf8')
+    bus.emit('bulletin:created', { id: b.id, title })
+    return { bulletin: b }
+  } catch (e) {
+    return reply.code(400).send({ error: String((e as Error).message ?? e) })
+  }
+})
+
+app.post('/api/v1/bulletins/:id/status', async (req, reply) => {
+  const body = req.body as { status?: 'open' | 'done' | 'dropped' | 'replied' }
+  if (!body?.status) return reply.code(400).send({ error: '需要 status' })
+  try {
+    const b = await setBulletinStatus(KB_ROOT, (req.params as { id: string }).id, body.status)
+    return { bulletin: b }
+  } catch (e) {
+    const msg = String((e as Error).message ?? e)
+    return reply.code(msg.includes('ENOENT') ? 404 : 400).send({ error: msg })
+  }
+})
+
+app.post('/api/v1/bulletins/:id/reply', async (req, reply) => {
+  const body = req.body as { text?: string }
+  try {
+    const b = await replyBulletin(KB_ROOT, (req.params as { id: string }).id, 'user', String(body?.text ?? ''))
+    return { bulletin: b }
+  } catch (e) {
+    const msg = String((e as Error).message ?? e)
+    return reply.code(msg.includes('ENOENT') ? 404 : 400).send({ error: msg })
+  }
+})
+
 /** 图谱数据（F7 前端直接消费） */
 app.get('/api/v1/graph', async () => buildGraphData(KB_ROOT))
 
@@ -1268,6 +1322,7 @@ const SSE_EVENTS = [
   'task:done',
   'task:error',
   'task:skipped',
+  'bulletin:created',
 ] as const
 
 app.get('/api/v1/events', (req, reply) => {

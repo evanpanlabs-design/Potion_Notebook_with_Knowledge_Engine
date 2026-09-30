@@ -73,4 +73,9 @@ export const api = {
   pageSuggestions: (rel) => j(`/api/pages/${rel}/suggestions`),
   addSuggestion: (rel, note) => post(`/api/pages/${rel}/suggestions`, { note }),
   removeSuggestion: (rel, index) => j(`/api/pages/${rel}/suggestions/${index}`, { method: 'DELETE' }),
+  // ---- v0.3 · bulletin board 便利贴（ADR-003 D10-11） ----
+  listBulletins: () => j('/api/bulletins'),
+  createBulletin: (text, kind = 'note', ttlDays = 7) => post('/api/bulletins', { text, kind, ttlDays }),
+  setBulletinStatus: (id, status) => post(`/api/bulletins/${id}/status`, { status }),
+  replyBulletin: (id, text) => post(`/api/bulletins/${id}/reply`, { text }),
 }
