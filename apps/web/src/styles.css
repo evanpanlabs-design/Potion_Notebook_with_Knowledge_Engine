@@ -545,6 +545,13 @@ span.wikilink {
 .test-fail { color: #991b1b; font-size: 0.8125rem; }
 .settings-saverow { display: flex; align-items: center; gap: 14px; border-top: 1px solid var(--c-border); padding-top: 20px; }
 .settings-hint { color: var(--c-text-3); font-size: 0.8125rem; }
+
+/* v0.3 · Tavily 卡片：开关 + 月度用量条 */
+.settings-toggle { display: flex; align-items: center; gap: 10px; }
+.settings-toggle input[type='checkbox'] { width: 16px; height: 16px; accent-color: var(--c-primary); cursor: pointer; }
+.settings-usage { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px; }
+.settings-meter { height: 6px; border-radius: 3px; background: var(--c-border); overflow: hidden; }
+.settings-meter-fill { height: 100%; border-radius: 3px; background: var(--c-primary); transition: width 0.3s ease; }
 .banner-err { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
 
 /* ========== v0.2 文档工作台（Notes） ========== */

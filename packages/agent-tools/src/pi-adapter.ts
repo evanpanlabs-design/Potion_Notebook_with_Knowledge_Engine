@@ -120,25 +120,15 @@ export function createRouting(config: RoutingConfig) {
         config: c,
       }
     },
-    /** 直连流（不*RPM 门控，供 gated 包装调用；外部请勿直接用） */
-    rawStream(resolved: ResolvedModel, context: { systemPrompt?: string; messages: unknown[] }): AssistantMessageEventStream {
+    /** 直连流（不经 RPM 门控，供 gated 包装调用；外部请勿直接用） */
+    rawStream(
+      resolved: ResolvedModel,
+      context: { systemPrompt?: string; messages: unknown[]; tools?: unknown[] },
+    ): AssistantMessageEventStream {
       return models.stream(resolved.model, context as never)
     },
-    /** 流式调用（经 RPM 门控）：返回惰性 AsyncIterable。
-     * 票据在开始迭代时获取、首个事件到达后归还（即限流按“请求发起”计），
-     * 迭代中途异常会释放票据，不会死锁队列 */
-    stream(kind: TaskKind, systemPrompt: string | undefined, messages: SimpleMessage[]): AssistantMessageEventStream {
-      const resolved = this.resolve(kind)
-      // pi Message 是判别联合：按 role 分支构造
-      const now = Date.now()
-      const context = {
-        systemPrompt,
-        messages: messages.map((m) =>
-          m.role === 'user'
-            ? { role: 'user', content: m.text, timestamp: now }
-            : { role: 'system', content: m.text, timestamp: now },
-        ),
-      }
+    /** RPM 门控的流式调用公共实现（stream / streamRaw 共用） */
+    _gated(resolved: ResolvedModel, context: { systemPrompt?: string; messages: unknown[]; tools?: unknown[] }): AssistantMessageEventStream {
       const gate = globalRpmGate()
       const self = this
       async function* gated(): AsyncGenerator<AssistantMessageEvent> {
@@ -160,6 +150,32 @@ export function createRouting(config: RoutingConfig) {
         }
       }
       return gated() as never as AssistantMessageEventStream
+    },
+    /** 流式调用（经 RPM 门控）：返回惰性 AsyncIterable。
+     * 票据在开始迭代时获取、首个事件到达后归还（即限流按“请求发起”计），
+     * 迭代中途异常会释放票据，不会死锁队列 */
+    stream(kind: TaskKind, systemPrompt: string | undefined, messages: SimpleMessage[]): AssistantMessageEventStream {
+      const resolved = this.resolve(kind)
+      // pi Message 是判别联合：按 role 分支构造
+      const now = Date.now()
+      const context = {
+        systemPrompt,
+        messages: messages.map((m) =>
+          m.role === 'user'
+            ? { role: 'user', content: m.text, timestamp: now }
+            : { role: 'system', content: m.text, timestamp: now },
+        ),
+      }
+      return this._gated(resolved, context)
+    },
+    /** 原始上下文流（agent loop 用）：messages 直接传 pi Message 形状（含 assistant/toolResult），
+     * tools 为 pi-ai Tool 声明数组。同样经 RPM 门控 */
+    streamRaw(
+      kind: TaskKind,
+      context: { systemPrompt?: string; messages: unknown[]; tools?: unknown[] },
+    ): AssistantMessageEventStream {
+      const resolved = this.resolve(kind)
+      return this._gated(resolved, context)
     },
   }
 }

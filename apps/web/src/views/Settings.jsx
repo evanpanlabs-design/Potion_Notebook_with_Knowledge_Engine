@@ -85,6 +85,90 @@ function MineruCard() {
   )
 }
 
+/** Tavily 联网检索集成（v0.3，ADR-003 D1）：Key + 开关 + 用量。
+ *  Key 优先级：data/tavily-config.json > 环境变量 TAVILY_API_KEY；存本地不入 git。 */
+function TavilyCard() {
+  const [cfg, setCfg] = useState(null) // { hasKey, masked, enabled, usedCount, limit }
+  const [draft, setDraft] = useState('')
+  const [status, setStatus] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const load = () => api.getTavilyConfig().then(setCfg).catch(() => {})
+  useEffect(() => { load() }, [])
+
+  async function save(patch) {
+    setBusy(true)
+    setStatus(null)
+    try {
+      const payload = { ...patch }
+      if (draft.trim()) payload.apiKey = draft.trim()
+      const r = await api.saveTavilyConfig(payload)
+      setDraft('')
+      setCfg((c) => ({ ...c, masked: r.masked, enabled: r.enabled, hasKey: Boolean(r.masked) }))
+      setStatus({ ok: true, message: '已保存' })
+    } catch (e) {
+      setStatus({ ok: false, message: e.message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function test() {
+    setBusy(true)
+    setStatus(null)
+    try {
+      const r = await api.testTavily(draft.trim())
+      setStatus({ ok: r.ok, message: r.ok ? `✓ 连通 ${r.latencyMs}ms · 命中 ${r.hits} 条` : `✕ ${r.message}` })
+    } catch (e) {
+      setStatus({ ok: false, message: e.message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const usedPct = cfg ? Math.min(100, Math.round((cfg.usedCount / cfg.limit) * 100)) : 0
+
+  return (
+    <section className="card settings-role">
+      <h2>联网检索（Tavily）</h2>
+      <p className="settings-desc">
+        开启后，提问球的 Agent 模式可联网搜索库外资料（图谱自检与定时日报也依赖它）。
+        Key 在 <a href="https://app.tavily.com/home" target="_blank" rel="noreferrer">app.tavily.com</a> 创建，免费档 1000 次/月；
+        存于 <code>data/tavily-config.json</code>（本地文件，不入库不进 git）。
+      </p>
+      <label className="settings-field">
+        <span>API Key {cfg?.masked ? <span className="settings-hint">（已配置：{cfg.masked}，留空沿用）</span> : null}</span>
+        <input
+          type="password"
+          value={draft}
+          placeholder={cfg?.hasKey ? '留空则沿用已保存的 Key' : 'tvly-…'}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      </label>
+      <label className="settings-field settings-toggle">
+        <input
+          type="checkbox"
+          checked={cfg?.enabled ?? false}
+          disabled={busy || !cfg?.hasKey}
+          onChange={(e) => save({ enabled: e.target.checked })}
+        />
+        <span>启用联网检索{cfg && !cfg.hasKey ? '（先配置 API Key）' : ''}</span>
+      </label>
+      {cfg && cfg.enabled && (
+        <div className="settings-usage">
+          <span className="settings-hint">本月用量：{cfg.usedCount} / {cfg.limit}</span>
+          <div className="settings-meter"><div className="settings-meter-fill" style={{ width: `${usedPct}%` }} /></div>
+        </div>
+      )}
+      <div className="settings-saverow">
+        <button className="btn btn-primary btn-sm" disabled={busy || (!draft.trim() && !cfg?.hasKey)} onClick={() => save({})}>保存</button>
+        <button className="btn btn-secondary btn-sm" disabled={busy || (!draft.trim() && !cfg?.hasKey)} onClick={test}>测试连通性</button>
+        {status && <span className={status.ok ? 'settings-hint' : 'settings-warn'}>{status.message}</span>}
+      </div>
+    </section>
+  )
+}
+
 function RoleForm({ role, form, onChange, onTest, testing, testResult }) {
   const set = (k, v) => onChange(role, { ...form, [k]: v })
   return (
@@ -275,6 +359,7 @@ export default function Settings() {
       </div>
 
       <MineruCard />
+      <TavilyCard />
     </div>
   )
 }

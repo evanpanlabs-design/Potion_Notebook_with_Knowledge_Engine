@@ -50,4 +50,9 @@ export const api = {
     return j('/api/mineru/convert', { method: 'POST', body: fd })
   },
   mineruTasks: () => j('/api/mineru/tasks'),
+  // ---- v0.3 · Tavily 联网检索 / Agent 多步问答（ADR-003 D1） ----
+  getTavilyConfig: () => j('/api/tavily/config'),
+  saveTavilyConfig: (payload) => post('/api/tavily/config', payload),
+  testTavily: (apiKey) => post('/api/tavily/config/test', { apiKey }),
+  agentQuery: (question) => post('/api/agent-query', { question }),
 }

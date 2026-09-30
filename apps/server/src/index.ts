@@ -12,6 +12,9 @@ import { initKb, scanKb, parsePage, renderLogEntry, serializePage } from '@ke/co
 import { createRouting, collectText } from '@ke/agent-tools'
 import { ingestSource, gitCommitAll } from './ingest-pipeline.ts'
 import { answerQuery, buildGraphData } from './query-pipeline.ts'
+import { answerWithAgent } from './agent-query.ts'
+import { resolveTavilyConfig, saveTavilyConfig, TAVILY_MONTHLY_LIMIT, type TavilyConfig } from './agent-tools.ts'
+import { createTavilyClient } from '@ke/agent-tools'
 import { resolveLlmConfig, saveLlmConfig, maskApiKey, mergeApiKey, type LlmConfigFile, type LlmRoleConfig } from './llm-config.ts'
 import { syncPage, runReworkBatch, getReworkState } from './maintain-pipeline.ts'
 import {
@@ -275,6 +278,56 @@ app.post('/api/v1/mineru/config/test', async (req, reply) => {
   return testMineruConnectivity(key)
 })
 
+// ---------------------------------------------------------------------------
+// Tavily 联网检索配置（ADR-003 D1）：key + 开关 + 月度用量
+// ---------------------------------------------------------------------------
+
+function maskTavilyKey(key: string): string {
+  if (key.length <= 8) return '••••'
+  return `${key.slice(0, 6)}••••${key.slice(-4)}`
+}
+
+app.get('/api/v1/tavily/config', async () => {
+  const cfg = await resolveTavilyConfig(DATA_ROOT)
+  const month = new Date().toISOString().slice(0, 7)
+  return {
+    hasKey: Boolean(cfg.apiKey),
+    masked: cfg.apiKey ? maskTavilyKey(cfg.apiKey) : null,
+    enabled: cfg.enabled,
+    usedCount: cfg.usedMonth === month ? cfg.usedCount : 0,
+    limit: TAVILY_MONTHLY_LIMIT,
+  }
+})
+
+app.post('/api/v1/tavily/config', async (req, reply) => {
+  const body = req.body as { apiKey?: string; enabled?: boolean }
+  const cur = await resolveTavilyConfig(DATA_ROOT)
+  const patch: Partial<TavilyConfig> = {}
+  const next = body?.apiKey?.trim() ?? ''
+  if (next && !next.includes('••')) patch.apiKey = next // 留空/打码 = 沿用
+  if (typeof body?.enabled === 'boolean') patch.enabled = body.enabled
+  if (!next && !cur.apiKey) {
+    if (body?.enabled) return reply.code(400).send({ error: '启用联网检索前需先配置 API Key' })
+  }
+  const saved = await saveTavilyConfig(DATA_ROOT, patch)
+  return { ok: true, masked: saved.apiKey ? maskTavilyKey(saved.apiKey) : null, enabled: saved.enabled }
+})
+
+app.post('/api/v1/tavily/config/test', async (req, reply) => {
+  const body = req.body as { apiKey?: string }
+  let key = body?.apiKey?.trim() ?? ''
+  if (!key || key.includes('••')) key = (await resolveTavilyConfig(DATA_ROOT)).apiKey
+  if (!key) return reply.code(400).send({ ok: false, message: '尚未配置 API Key' })
+  const started = Date.now()
+  try {
+    const client = createTavilyClient(key)
+    const r = await client.search('hello world', { maxResults: 1 })
+    return { ok: true, latencyMs: Date.now() - started, hits: r.hits.length, sample: r.hits[0]?.title?.slice(0, 80) ?? '' }
+  } catch (e) {
+    return { ok: false, message: (e as Error).message }
+  }
+})
+
 /** PDF/图片 → MinerU 结构化解析任务。multipart 字段名 files（可多文件）。 */
 app.post('/api/v1/mineru/convert', async (req, reply) => {
   const apiKey = await readMineruKey(DATA_ROOT)
@@ -432,6 +485,22 @@ app.post('/api/v1/query', async (req, reply) => {
   }
   try {
     const outcome = await answerQuery({ kbRoot: KB_ROOT, routing: await llmRouting(), events: bus }, body.question, { archive: body.archive })
+    return outcome
+  } catch (e) {
+    req.log.error(e)
+    return reply.code(500).send({ error: String((e as Error).message ?? e) })
+  }
+})
+
+/** Agent 多步问答（ADR-003 D1）：工具调用式研究管道；事件经 bus 广播（agent:*） */
+app.post('/api/v1/agent-query', async (req, reply) => {
+  const body = req.body as { question?: string }
+  if (!body?.question?.trim()) {
+    return reply.code(400).send({ error: '需要 question' })
+  }
+  try {
+    const routing = await llmRouting()
+    const outcome = await answerWithAgent({ kbRoot: KB_ROOT, dataRoot: DATA_ROOT, routing, events: bus }, body.question)
     return outcome
   } catch (e) {
     req.log.error(e)
