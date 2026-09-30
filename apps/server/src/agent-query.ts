@@ -5,13 +5,14 @@
  * （search_kb / read_page / list_neighbors / web_search），多步探索后综合回答。
  * 围栏：工具白名单 + 轮次上限 + 全程 trace 留痕（log.md + 返回体）。
  */
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 
-import { scanKb, parsePage, renderLogEntry, serializePage } from '@ke/core'
+import { scanKb, parsePage, renderLogEntry } from '@ke/core'
 import { runAgentLoop, type AgentLoopResult, type AgentToolSpec } from '@ke/agent-tools'
 import { buildKbTools } from './agent-tools.ts'
+import { beginTask, finishTask } from './workbench.ts'
 
 export interface AgentQueryDeps {
   kbRoot: string
@@ -38,20 +39,42 @@ const AGENT_PROMPT = `你是知识库研究助手，可以调用工具多步检�
 5. 工具调用要有节制：通常 2-6 步足够；信息够了就直接作答，不要为调而调
 6. 回答用与问题相同的语言，简洁直接，Markdown 格式`
 
-/** Agent 多步问答主入口 */
+/** Agent 多步问答主入口：轨迹同步序列化到 data/tasks/<taskId>.md（ADR-003 §3.4 workbench） */
 export async function answerWithAgent(deps: AgentQueryDeps, question: string): Promise<AgentQueryOutcome> {
   const { kbRoot, dataRoot, routing } = deps
   const events = deps.events ?? new EventEmitter()
   const tools: AgentToolSpec[] = await buildKbTools({ kbRoot, dataRoot })
+  const startedAt = new Date().toISOString()
+  // 任务开始即落 running 态（崩溃留痕）；结束后覆写终态
+  const taskId = await beginTask(dataRoot, { question, toolCount: tools.length })
 
-  const result = await runAgentLoop({
-    systemPrompt: AGENT_PROMPT,
-    userPrompt: question,
-    tools,
-    routing,
-    maxTurns: 8,
-    onEvent: (ev) => events.emit(ev.type, ev),
-  })
+  let result: AgentLoopResult
+  try {
+    result = await runAgentLoop({
+      systemPrompt: AGENT_PROMPT,
+      userPrompt: question,
+      tools,
+      routing,
+      maxTurns: 8,
+      onEvent: (ev) => events.emit(ev.type, ev),
+    })
+  } catch (e) {
+    // 失败也留完整轨迹（探索到哪一步、错误是什么）
+    await finishTask(dataRoot, taskId, {
+      status: 'error',
+      question,
+      toolCount: tools.length,
+      startedAt,
+      trace: [],
+      answer: '',
+      turns: 0,
+      steps: 0,
+      truncated: false,
+      tokens: null,
+      error: (e as Error).message,
+    }).catch(() => {})
+    throw e
+  }
 
   // 引用归一化：agent 产出的 [[页面名]] 补 path（复用 query 管线同款策略）
   const answer = await normalizeCitations(kbRoot, question, result.answer)
@@ -63,6 +86,20 @@ export async function answerWithAgent(deps: AgentQueryDeps, question: string): P
     renderLogEntry('query', `${question.slice(0, 40)} [agent ${result.turns}轮${result.steps}步: ${toolSummary.slice(0, 80)}]`),
     'utf8',
   )
+
+  // workbench 终态落盘（失败不阻塞回答返回）
+  await finishTask(dataRoot, taskId, {
+    status: 'done',
+    question,
+    toolCount: tools.length,
+    startedAt,
+    trace: result.trace,
+    answer,
+    turns: result.turns,
+    steps: result.steps,
+    truncated: result.truncated,
+    tokens: result.tokens,
+  }).catch(() => {})
 
   return { question, ...result, answer }
 }
@@ -88,5 +125,3 @@ async function normalizeCitations(kbRoot: string, question: string, answer: stri
   void question
   return out
 }
-
-export { mkdir, writeFile, serializePage }

@@ -25,6 +25,7 @@ import { listInbox, readInboxItem, digestInboxItem } from './inbox.ts'
 import { runAudit, getAuditState } from './audit-pipeline.ts'
 import { addUserSuggestion, removeSuggestion, readSuggestions } from './suggest.ts'
 import { listBulletins, createBulletin, setBulletinStatus, replyBulletin } from './bulletin.ts'
+import { listTasks as listWorkbenchTasks, readTask as readWorkbenchTask } from './workbench.ts'
 import {
   readMineruKey, writeMineruKey, maskMineruKey, checkUploadQuota,
   testMineruConnectivity, uploadFilesToMineru, pollBatchResults, fetchMarkdownFromZip,
@@ -827,6 +828,24 @@ app.post('/api/v1/bulletins/:id/reply', async (req, reply) => {
   } catch (e) {
     const msg = String((e as Error).message ?? e)
     return reply.code(msg.includes('ENOENT') ? 404 : 400).send({ error: msg })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// workbench 任务轨迹（ADR-003 §3.4 / D12）：agent 任务四节结构化留痕
+// ---------------------------------------------------------------------------
+
+/** 任务列表（新在前，轻量元信息；详情走 :id） */
+app.get('/api/v1/workbench', async () => ({ tasks: await listWorkbenchTasks(DATA_ROOT) }))
+
+app.get('/api/v1/workbench/:id', async (req, reply) => {
+  const id = (req.params as { id: string }).id
+  try {
+    const t = await readWorkbenchTask(DATA_ROOT, id)
+    if (!t) return reply.code(404).send({ error: `任务不存在：${id}` })
+    return { task: t }
+  } catch (e) {
+    return reply.code(400).send({ error: String((e as Error).message ?? e) })
   }
 })
 

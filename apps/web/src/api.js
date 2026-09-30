@@ -78,4 +78,7 @@ export const api = {
   createBulletin: (text, kind = 'note', ttlDays = 7) => post('/api/bulletins', { text, kind, ttlDays }),
   setBulletinStatus: (id, status) => post(`/api/bulletins/${id}/status`, { status }),
   replyBulletin: (id, text) => post(`/api/bulletins/${id}/reply`, { text }),
+  // ---- v0.3 · workbench 任务轨迹（ADR-003 D12） ----
+  listWorkbench: () => j('/api/workbench'),
+  workbenchTask: (id) => j(`/api/workbench/${id}`),
 }

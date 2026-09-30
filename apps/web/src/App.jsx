@@ -8,6 +8,7 @@ import Sources from './views/Sources.jsx'
 import Graph from './views/Graph.jsx'
 import Inbox from './views/Inbox.jsx'
 import Bulletins from './views/Bulletins.jsx'
+import Workbench from './views/Workbench.jsx'
 import Review from './views/Review.jsx'
 import Settings from './views/Settings.jsx'
 import AskOrb from './AskOrb.jsx'
@@ -28,6 +29,7 @@ const NAV = [
   { id: 'bulletins', iconKey: 'bulletins', icon: '📌', label: '便利贴' },
   { id: 'review', iconKey: 'review', icon: '☑', label: '审核' },
   { id: 'ask', iconKey: 'ask', icon: '◎', label: '问答历史' },
+  { id: 'workbench', iconKey: 'workbench', icon: '⌘', label: '工作台' },
   { id: 'settings', iconKey: 'settings', icon: '⚙', label: '设置' },
 ]
 
@@ -229,6 +231,7 @@ export default function App() {
       <main className="main">
         {view === 'overview' && <Overview onOpenPage={openPage} go={switchView} />}
         {view === 'ask' && <Ask onOpenPage={openPage} />}
+        {view === 'workbench' && <Workbench />}
         {view === 'notes' && <Notes onOpenPage={openPage} stream={stream} />}
 {view === 'sources' && <Sources onOpenPage={openPage} go={switchView} stream={stream} />}
         {view === 'graph' && <Graph onOpenPage={openPage} go={switchView} />}
