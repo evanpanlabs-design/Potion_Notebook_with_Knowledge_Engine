@@ -12,6 +12,16 @@
 import { Value } from '@sinclair/typebox/value'
 import type { Static, TSchema } from '@sinclair/typebox'
 
+// pi-agent-core compaction 纯函数复用（ADR-003 D6/D13）：阈值决策与文本序列化。
+// 摘要生成不走 pi 的 Models/Context 重依赖，而是走我们自己的 routing 边界
+// （compactWithRequest 的 caller-owned request 思想）。
+import {
+  shouldCompact,
+  estimateTokens,
+  serializeConversation,
+  DEFAULT_COMPACTION_SETTINGS,
+} from '@earendil-works/pi-agent-core'
+
 /** 工具执行结果（回给模型的内容） */
 export interface AgentToolOutput {
   content: string
@@ -44,6 +54,7 @@ export type AgentLoopEvent =
   | { type: 'agent:turn_start'; turn: number }
   | { type: 'agent:tool_start'; name: string; args: Record<string, unknown> }
   | { type: 'agent:tool_end'; name: string; ms: number; isError: boolean; preview: string }
+  | { type: 'agent:compacted'; tokensBefore: number; tokensAfter: number; keptMessages: number }
   | { type: 'agent:done'; turns: number; steps: number; truncated: boolean; tokens: { input: number; output: number } }
   | { type: 'agent:error'; message: string }
 
@@ -56,6 +67,12 @@ export interface AgentLoopTraceStep {
   ms: number
 }
 
+/** 一次上下文压缩的留痕 */
+export interface AgentCompactionRecord {
+  tokensBefore: number
+  tokensAfter: number
+}
+
 export interface AgentLoopResult {
   answer: string
   /** LLM 轮数（每轮 = 一次流式调用，可能含多个工具调用） */
@@ -66,6 +83,8 @@ export interface AgentLoopResult {
   truncated: boolean
   tokens: { input: number; output: number }
   trace: AgentLoopTraceStep[]
+  /** 上下文压缩记录（ADR-003 §3.5；空 = 从未触发） */
+  compactions: AgentCompactionRecord[]
 }
 
 /** loop 依赖的最小 routing 接口（pi-adapter 的 streamRaw 满足；测试用 fake） */
@@ -83,6 +102,10 @@ export interface AgentLoopOptions {
   routing: AgentLoopRouting
   /** 轮次上限（围栏），默认 8 */
   maxTurns?: number
+  /** 模型上下文窗口（token）——压缩阈值判定用；默认 128k（保守值，不知道实际窗口时） */
+  contextWindow?: number
+  /** 压缩设置（ADR-003 §3.5；缺省用 pi DEFAULT_COMPACTION_SETTINGS） */
+  compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number }
   onEvent?: (ev: AgentLoopEvent) => void
 }
 
@@ -122,6 +145,11 @@ function extractContent(message: unknown): {
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopResult> {
   const { systemPrompt, userPrompt, tools, routing } = opts
   const maxTurns = opts.maxTurns ?? 8
+  const contextWindow = opts.contextWindow ?? 128_000
+  const compactionSettings = {
+    ...DEFAULT_COMPACTION_SETTINGS,
+    ...(opts.compaction ?? {}),
+  }
   const emit = (ev: AgentLoopEvent) => opts.onEvent?.(ev)
 
   const byName = new Map(tools.map((t) => [t.name, t]))
@@ -129,6 +157,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
 
   const transcript: unknown[] = [{ role: 'user', content: userPrompt, timestamp: Date.now() }]
   const trace: AgentLoopTraceStep[] = []
+  const compactions: AgentCompactionRecord[] = []
   const tokens = { input: 0, output: 0 }
   let answer = ''
   let turns = 0
@@ -212,6 +241,18 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
         })
       }
 
+      // 每轮工具调用后检查上下文预算（ADR-003 §3.5）：超阈值 → 压缩旧史为摘要 + 保留近期原文
+      if (compactionSettings.enabled) {
+        const contextTokens = estimateContext(transcript)
+        if (shouldCompact(contextTokens, contextWindow, compactionSettings)) {
+          const before = contextTokens
+          const done = await compactTranscript(transcript, routing, compactionSettings.keepRecentTokens)
+          const after = estimateContext(transcript)
+          compactions.push({ tokensBefore: before, tokensAfter: after })
+          emit({ type: 'agent:compacted', tokensBefore: before, tokensAfter: after, keptMessages: done })
+        }
+      }
+
       // 轮次用尽仍有工具调用 → 截断（围栏生效）
       if (turn === maxTurns - 1) {
         truncated = true
@@ -224,7 +265,71 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     throw e
   }
 
-  const result: AgentLoopResult = { answer: answer.trim(), turns, steps, truncated, tokens, trace }
+  const result: AgentLoopResult = { answer: answer.trim(), turns, steps, truncated, tokens, trace, compactions }
   emit({ type: 'agent:done', turns, steps, truncated, tokens })
   return result
+}
+
+// ---------------------------------------------------------------------------
+// 上下文压缩（ADR-003 §3.5）：复用 pi-agent-core 纯函数 + 自有 routing 摘要边界
+// ---------------------------------------------------------------------------
+
+/** transcript 全量 token 估算（pi 启发式：字符/4，assistant 按 content 分块计） */
+function estimateContext(messages: unknown[]): number {
+  let total = 0
+  for (const m of messages) total += estimateTokens(m as never)
+  return total
+}
+
+const COMPACTION_SYSTEM_PROMPT =
+  'You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary. Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.'
+
+const COMPACTION_USER_PROMPT = `以下是一段需要压缩的 agent 对话史（问题、检索与工具调用）。生成结构化检查点摘要，供下一个 LLM 继续工作。必须保留：
+1. 用户的原始问题与已确认的约束
+2. 已完成的检索步骤及其关键命中（结论，不是原文）
+3. 尚未完成的方向与下一步计划
+只输出摘要本身。`
+
+/** 压缩 transcript：旧史 → LLM 摘要消息 + 近期原文。返回保留的消息数。失败时原样不动（围栏：压缩不能杀死任务） */
+async function compactTranscript(
+  transcript: unknown[],
+  routing: AgentLoopRouting,
+  keepRecentTokens: number,
+): Promise<number> {
+  // 从尾部保留消息直到近期预算用完（至少保留最后一条 toolResult，避免破坏在途轮次）
+  const kept: unknown[] = []
+  let keptTokens = 0
+  let cut = transcript.length
+  while (cut > 0 && (kept.length === 0 || keptTokens < keepRecentTokens)) {
+    cut--
+    const m = transcript[cut]!
+    kept.unshift(m)
+    keptTokens += estimateTokens(m as never)
+  }
+  const oldPart = transcript.slice(0, cut)
+  if (oldPart.length === 0) return transcript.length
+
+  // 旧史序列化（复用 pi serializeConversation）→ 走 routing 生成摘要
+  const serialized = serializeConversation(oldPart as never)
+  let summary = ''
+  try {
+    for await (const ev of routing.streamRaw('query', {
+      systemPrompt: COMPACTION_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: `${COMPACTION_USER_PROMPT}\n\n---\n${serialized}` }],
+    })) {
+      if (ev.type === 'text_delta' && typeof ev.delta === 'string') summary += ev.delta
+    }
+  } catch {
+    return transcript.length // 摘要失败：不压缩比压坏强
+  }
+  if (!summary.trim()) return transcript.length
+
+  const summaryMsg = {
+    role: 'user',
+    content: `[上下文压缩] 以下是此前对话的结构化摘要（原文已折叠，请基于摘要与后续原文继续任务）：\n\n${summary.trim()}`,
+    timestamp: Date.now(),
+  }
+  transcript.length = 0
+  transcript.push(summaryMsg, ...kept)
+  return kept.length
 }

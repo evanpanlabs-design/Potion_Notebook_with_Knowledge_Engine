@@ -11,7 +11,7 @@ import { EventEmitter } from 'node:events'
 
 import { scanKb, parsePage, renderLogEntry } from '@ke/core'
 import { runAgentLoop, type AgentLoopResult, type AgentToolSpec } from '@ke/agent-tools'
-import { buildKbTools } from './agent-tools.ts'
+import { buildKbTools, loadSkillHints, renderSkillHints } from './agent-tools.ts'
 import { beginTask, finishTask } from './workbench.ts'
 
 export interface AgentQueryDeps {
@@ -45,13 +45,15 @@ export async function answerWithAgent(deps: AgentQueryDeps, question: string): P
   const events = deps.events ?? new EventEmitter()
   const tools: AgentToolSpec[] = await buildKbTools({ kbRoot, dataRoot })
   const startedAt = new Date().toISOString()
+  // skills/ 只读扫描（D13 stretch）：启动级 name/description 注入 system prompt
+  const skillSuffix = renderSkillHints(await loadSkillHints(kbRoot))
   // 任务开始即落 running 态（崩溃留痕）；结束后覆写终态
   const taskId = await beginTask(dataRoot, { question, toolCount: tools.length })
 
   let result: AgentLoopResult
   try {
     result = await runAgentLoop({
-      systemPrompt: AGENT_PROMPT,
+      systemPrompt: AGENT_PROMPT + skillSuffix,
       userPrompt: question,
       tools,
       routing,

@@ -10,9 +10,10 @@
  * 围栏（ADR-002 阶段 A 原则）：工具只读；写操作一律走 gate executor，不在这里开口子。
  * Tavily 配置：data/tavily-config.json（key + enabled + 用量）> 环境变量 TAVILY_API_KEY（默认关）。
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
+import type { Dirent } from 'node:fs'
 
 import { Type } from '@sinclair/typebox'
 import { scanKb, parsePage, lexicalMatch, buildLinkGraph, type PageDoc } from '@ke/core'
@@ -203,6 +204,49 @@ export async function buildKbTools(deps: KbToolsDeps): Promise<AgentToolSpec[]> 
   }
 
   return tools
+}
+
+// ---------------------------------------------------------------------------
+// skills/ 只读扫描注入（ADR-003 D4 stretch：Agent Skills 规范，渐进披露启动级）
+//
+// skills/<dir>/SKILL.md frontmatter（name/description）拼进 agent system prompt——
+// 只注入启动级元信息（name + description），全文命中加载留给 v0.4。
+// 与 CatPaw skill-creator 产物同规范互通：用户造好 skill 直接丢 skills/ 目录即可。
+// ---------------------------------------------------------------------------
+
+export interface SkillHint {
+  dir: string
+  name: string
+  description: string
+}
+
+/** 扫描 kbRoot/skills 下每个子目录的 SKILL.md，提取启动级元信息（读不了/缺字段的安全跳过） */
+export async function loadSkillHints(kbRoot: string): Promise<SkillHint[]> {
+  let entries: Dirent[] = []
+  try {
+    entries = await readdir(path.join(kbRoot, 'skills'), { withFileTypes: true })
+  } catch {
+    return [] // 无 skills/ 目录：正常
+  }
+  const hints: SkillHint[] = []
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith('.')) continue
+    try {
+      const text = await readFile(path.join(kbRoot, 'skills', e.name, 'SKILL.md'), 'utf8')
+      const { fm } = parsePage(text)
+      const name = (fm['name'] as string)?.trim()
+      const description = (fm['description'] as string)?.trim()
+      if (name && description) hints.push({ dir: e.name, name, description })
+    } catch { /* 跳过坏文件 */ }
+  }
+  return hints
+}
+
+/** 拼接 system prompt 尾部的 skills 启动级提示（无 skills 返回原样） */
+export function renderSkillHints(hints: SkillHint[]): string {
+  if (hints.length === 0) return ''
+  const lines = hints.map((h) => `- ${h.name}：${h.description}`)
+  return `\n\n可用技能（skills/ 目录，按需参考其领域方法）：\n${lines.join('\n')}`
 }
 
 export { process }
