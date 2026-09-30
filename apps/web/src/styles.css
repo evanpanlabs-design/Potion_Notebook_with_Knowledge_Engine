@@ -1139,3 +1139,49 @@ span.wikilink {
   border-top: 1px solid #eef2f6;
 }
 .inbox-action-note { font-size: 11px; color: var(--c-text-3, #94a3b8); }
+
+/* ---- v0.3 D6-7：图谱自检条 + 审核页建议面板 ---- */
+.audit-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.audit-note { font-size: 12px; color: var(--c-text-2, #475569); }
+.audit-suggestions {
+  border-top: 1px solid #eef2f6;
+  padding: 10px 16px;
+  background: #f0f7ff;
+}
+.audit-suggestions-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-primary, #3b82f6);
+  margin-bottom: 8px;
+}
+.audit-suggestion-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.audit-sug-origin {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 0 6px;
+}
+.audit-sug-origin.audit { color: #4f46e5; border: 1px solid #c7d2fe; }
+.audit-sug-origin.user { color: #059669; border: 1px solid #a7f3d0; }
+.audit-sug-note { color: var(--c-text-1, #1e293b); }
+.audit-sug-action {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--c-text-3, #94a3b8);
+  border: 1px dashed #cbd5e1;
+  border-radius: 4px;
+  padding: 0 6px;
+}

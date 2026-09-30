@@ -229,7 +229,7 @@ export default function App() {
         {view === 'ask' && <Ask onOpenPage={openPage} />}
         {view === 'notes' && <Notes onOpenPage={openPage} stream={stream} />}
 {view === 'sources' && <Sources onOpenPage={openPage} go={switchView} stream={stream} />}
-        {view === 'graph' && <Graph onOpenPage={openPage} />}
+        {view === 'graph' && <Graph onOpenPage={openPage} go={switchView} />}
         {view === 'inbox' && <Inbox onOpenPage={openPage} go={switchView} />}
         {view === 'review' && <Review />}
         {view === 'settings' && <Settings />}

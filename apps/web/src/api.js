@@ -66,4 +66,8 @@ export const api = {
   listInbox: () => j('/api/inbox'),
   readInbox: (rel) => j(`/api/${rel.replace(/^inbox\//, 'inbox/')}`),
   digestInbox: (rel) => post(`/api/${rel.replace(/^inbox\//, 'inbox/')}/digest`, {}),
+  // ---- v0.3 · graph audit（ADR-003 D6-7） ----
+  startAudit: () => post('/api/graph/audit', {}),
+  auditStatus: () => j('/api/graph/audit/status'),
+  auditSuggestions: () => j('/api/graph/suggestions'),
 }

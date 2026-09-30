@@ -22,6 +22,7 @@ import { syncPage, runReworkBatch, getReworkState } from './maintain-pipeline.ts
 import { startScheduler, type SchedulerHandle } from './scheduler.ts'
 import { createDigestRunner } from './digest-runner.ts'
 import { listInbox, readInboxItem, digestInboxItem } from './inbox.ts'
+import { runAudit, getAuditState } from './audit-pipeline.ts'
 import {
   readMineruKey, writeMineruKey, maskMineruKey, checkUploadQuota,
   testMineruConnectivity, uploadFilesToMineru, pollBatchResults, fetchMarkdownFromZip,
@@ -676,6 +677,62 @@ app.post('/api/v1/inbox/*/digest', async (req, reply) => {
   } catch (e) {
     return reply.code(500).send({ error: String((e as Error).message ?? e) })
   }
+})
+
+// ---------- D6-7：graph audit（体检 → LLM 判定 → 建议写 suggestions） ----------
+
+/** 从库快照读页面语料（audit 用；query 归档页过期的不算知识节点） */
+async function loadPageDocsFrom(snap: { pages: Set<string> }): Promise<import('@ke/core').PageDoc[]> {
+  const out: import('@ke/core').PageDoc[] = []
+  const now = Date.now()
+  for (const rel of snap.pages) {
+    const { fm, body } = parsePage(await readFile(path.join(KB_ROOT, rel), 'utf8'))
+    const expires = fm['expires_at'] as string | undefined
+    if (fm['type'] === 'query' && expires && Date.parse(expires) < now) continue
+    out.push({
+      path: rel,
+      title: (fm['title'] as string) ?? rel,
+      aliases: (fm['aliases'] as string[]) ?? [],
+      tags: (fm['tags'] as string[]) ?? [],
+      body,
+    })
+  }
+  return out
+}
+
+/** 手动触发图谱自检（异步跑，状态走 GET audit/status 轮询） */
+app.post('/api/v1/graph/audit', async (req, reply) => {
+  try {
+    const routing = await llmRouting()
+    // 重新扫库（audit 期间库可能已变）
+    const snap = await scanKb(KB_ROOT)
+    const pages = await loadPageDocsFrom(snap)
+    void runAudit({ kbRoot: KB_ROOT, dataRoot: DATA_ROOT, routing }, pages)
+      .then(async (outcome) => {
+        await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('audit', `自检：${outcome.health.findings} 嫌疑 → ${outcome.proposals} 建议 → ${outcome.suggestionsWritten.length} 页落盘`), 'utf8')
+      })
+      .catch(() => {})
+    return { started: true }
+  } catch (e) {
+    return reply.code(500).send({ error: String((e as Error).message ?? e) })
+  }
+})
+
+app.get('/api/v1/graph/audit/status', async () => {
+  const s = getAuditState()
+  return { running: s.running, startedAt: s.startedAt, lastOutcome: s.lastOutcome }
+})
+
+/** 页面 suggestions 读取（审核视角：带 audit 建议的页面清单） */
+app.get('/api/v1/graph/suggestions', async () => {
+  const snap = await scanKb(KB_ROOT)
+  const out: Array<{ path: string; title: string; suggestions: unknown[] }> = []
+  for (const rel of snap.pages) {
+    const { fm } = parsePage(await readFile(path.join(KB_ROOT, rel), 'utf8'))
+    const sug = Array.isArray(fm['suggestions']) ? (fm['suggestions'] as unknown[]) : []
+    if (sug.length > 0) out.push({ path: rel, title: (fm['title'] as string) ?? rel, suggestions: sug })
+  }
+  return { pages: out }
 })
 
 /** 图谱数据（F7 前端直接消费） */

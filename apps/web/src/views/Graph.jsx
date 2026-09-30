@@ -52,12 +52,16 @@ const PAD = 70
  * 标签独立图层绘制在节点之后（任何节点都不遮挡文字），hover 标签放大强调 + 白色描边光晕；
  * 来源节点默认不渲染（可选开关恢复）。
  */
-export default function GraphView({ onOpenPage }) {
+export default function GraphView({ onOpenPage, go }) {
   const [graph, setGraph] = useState(null)
   const [error, setError] = useState('')
   const [hover, setHover] = useState(null)
   const [legendOpen, setLegendOpen] = useState(true) // 图例可折叠（默认展开）
   const [tuneOpen, setTuneOpen] = useState(false) // 微调面板可折叠（默认收起，基准参数已调好）
+  // v0.3 D6-7：graph audit（体检 → 建议 → 待审 suggestions）
+  const [auditBusy, setAuditBusy] = useState(false)
+  const [auditNote, setAuditNote] = useState('')
+  const auditTimer = useRef(null)
   const [showSources, setShowSources] = useState(false) // 来源节点默认不渲染
   // 配色：方案 + 着色模式（按页面类型 / 按 Louvain 聚类），均持久化到 localStorage
   const [schemeKey, setSchemeKey] = useState(() => localStorage.getItem('potion-graph-scheme') || 'classic')
@@ -306,12 +310,52 @@ export default function GraphView({ onOpenPage }) {
 
   const upd = (k) => (e) => setCfg((c) => ({ ...c, [k]: Number(e.target.value) }))
 
+  // v0.3 D6-7：触发图谱自检并轮询状态（跑完提示去审核页看建议）
+  useEffect(() => () => { if (auditTimer.current) clearInterval(auditTimer.current) }, [])
+  async function runAuditCheck() {
+    if (auditBusy) return
+    setAuditBusy(true)
+    setAuditNote('体检中…')
+    try {
+      await api.startAudit()
+      auditTimer.current = setInterval(async () => {
+        try {
+          const s = await api.auditStatus()
+          if (!s.running) {
+            if (auditTimer.current) clearInterval(auditTimer.current)
+            const o = s.lastOutcome
+            setAuditNote(
+              o
+                ? `自检完成：${o.health.findings} 嫌疑 → ${o.proposals} 建议 → ${o.suggestionsWritten.length} 页写入 suggestions（到「审核」页处理）`
+                : '自检完成',
+            )
+            setAuditBusy(false)
+          }
+        } catch { /* 轮询失败静默，下轮再试 */ }
+      }, 2000)
+    } catch (e) {
+      setAuditNote(`触发失败：${e.message}`)
+      setAuditBusy(false)
+    }
+  }
+
   return (
     <div className="page page-wide page-full">
       <h1 className="page-title">知识图谱</h1>
       <p className="page-desc">
         wiki 页面之间的 wikilink 关系网络。滚轮缩放 · 拖拽平移 · 点击节点查看页面内容。
       </p>
+
+      {/* v0.3 D6-7：图谱自检入口（体检 → 建议 → 审核队列） */}
+      <div className="audit-bar">
+        <button className="btn btn-secondary btn-sm" disabled={auditBusy} onClick={runAuditCheck} title="体检 → LLM 判定 → 建议写进页面 suggestions（待人工审核）">
+          {auditBusy ? '⏳ 自检中…' : '🩺 图谱自检'}
+        </button>
+        {auditNote && <span className="mono audit-note">{auditNote}</span>}
+        <button className="btn btn-ghost btn-sm" onClick={() => go?.('review')} title="audit 建议与 AI 生成页共用审核队列">
+          到审核页看建议 →
+        </button>
+      </div>
 
       {error && <div className="banner banner-danger">加载图谱失败：{error}</div>}
       {!graph && !error && (

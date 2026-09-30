@@ -20,6 +20,8 @@ export default function Review() {
 
   // 返修：意见草稿 + 返修池状态 + 批量修复进度
   const [reworkNote, setReworkNote] = useState('')
+  // v0.3 D6-7：选中页的 suggestions（audit 维护建议展示）
+  const [suggestions, setSuggestions] = useState([])
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchInfo, setBatchInfo] = useState(null) // {running, processing, done}
   const pollRef = useRef(null)
@@ -73,11 +75,12 @@ export default function Review() {
     }
   }, [refresh])
 
-  // 选中项变化：拉取页面内容 + 回显已有返修意见
+  // 选中项变化：拉取页面内容 + 回显已有返修意见 + 解析 suggestions（audit/用户建议）
   useEffect(() => {
     if (!sel) {
       setContent('')
       setReworkNote('')
+      setSuggestions([])
       return
     }
     setReworkNote(sel.rework?.note ?? '')
@@ -86,7 +89,29 @@ export default function Review() {
     setError('')
     api
       .page(sel.path)
-      .then((r) => alive && setContent(r.content))
+      .then((r) => {
+        if (!alive) return
+        setContent(r.content)
+        // frontmatter suggestions[] 展示（v0.3 D6-7 audit / D8-9 用户建议共用）：
+        // serializePage 输出形如
+        //   suggestions:
+        //     - origin: audit
+        //       note: 两页都讲 X
+        const sug = []
+        const fmMatch = r.content.match(/^---\n([\s\S]*?)\n---\n/)
+        if (fmMatch) {
+          const block = fmMatch[1].match(/^suggestions:((?:\n[ \t]+-.*)*)/m)
+          if (block) {
+            for (const item of block[1].split('\n-').map((s) => s.trim()).filter(Boolean)) {
+              const note = /note:\s*['"]?(.+?)['"]?\s*$/m.exec(item)?.[1] ?? ''
+              const origin = /origin:\s*(\w+)/.exec(item)?.[1] ?? 'audit'
+              const action = /action:\s*(\w+)/.exec(item)?.[1]
+              if (note) sug.push({ note, origin, action })
+            }
+          }
+        }
+        setSuggestions(sug)
+      })
       .catch((e) => alive && setError(`读取页面失败：${e.message}`))
       .finally(() => alive && setLoading(false))
     return () => {
@@ -251,6 +276,26 @@ export default function Review() {
                 <MarkdownHost text={stripFm} onOpenPage={() => {}} />
               )}
             </div>
+            {/* v0.3 D6-7：audit 维护建议（suggestions frontmatter）展示 */}
+            {suggestions.length > 0 && (
+              <div className="audit-suggestions">
+                <div className="audit-suggestions-label">图谱自检建议（人工确认后处置：可复制为返修意见，或手动执行）</div>
+                {suggestions.map((s, i) => (
+                  <div key={i} className="audit-suggestion-item">
+                    <span className={`audit-sug-origin ${s.origin}`}>{s.origin === 'audit' ? 'AI' : '我'}</span>
+                    <span className="audit-sug-note">{s.note}</span>
+                    {s.action && <span className="audit-sug-action">{s.action}</span>}
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      title="把这条建议转成返修意见，交给 LLM 集中执行"
+                      onClick={() => setReworkNote((n) => (n ? `${n}\n${s.note}` : s.note))}
+                    >
+                      转返修
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             {/* 返修意见区：提交进池 / 已有意见回显 */}
             <div className="rework-form">
               <label className="field-label" htmlFor="rework-note">返修意见（驳回之外的柔性处置：说明哪里要改，攒一批后统一让 LLM 修复）</label>
