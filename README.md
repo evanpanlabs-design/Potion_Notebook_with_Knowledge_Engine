@@ -117,6 +117,8 @@ v0.3 Agent 化（[ADR-003](docs/ADR-003-v0.3.md)）：agent loop（工具白名�
 - [ARCHITECTURE](docs/ARCHITECTURE.md) — 模块划分与 API 契约
 - [ADR-001](docs/ADR-001-mvp-scope.md) — MVP 范围决策
 - [ADR-002](docs/ADR-002-v0.2.md) — v0.2 文档工作台/返修池决策 + Agent 化三阶段路线
+- [ADR-003](docs/ADR-003-v0.3.md) — v0.3 Agent 化：自维护图谱、定时任务与收件箱、异步交互面板
+- [ADR-004](docs/ADR-004-v0.4.md) — v0.4 能力半径扩展：MCP、Skill 与受闸门的写操作（草案）
 
 ---
 
