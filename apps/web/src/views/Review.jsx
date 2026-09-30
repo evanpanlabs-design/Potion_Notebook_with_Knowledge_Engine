@@ -22,6 +22,9 @@ export default function Review() {
   const [reworkNote, setReworkNote] = useState('')
   // v0.3 D6-7：选中页的 suggestions（audit 维护建议展示）
   const [suggestions, setSuggestions] = useState([])
+  // D8-9：留建议输入与提交状态
+  const [sugDraft, setSugDraft] = useState('')
+  const [sugBusy, setSugBusy] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchInfo, setBatchInfo] = useState(null) // {running, processing, done}
   const pollRef = useRef(null)
@@ -111,6 +114,7 @@ export default function Review() {
           }
         }
         setSuggestions(sug)
+        setSugDraft('')
       })
       .catch((e) => alive && setError(`读取页面失败：${e.message}`))
       .finally(() => alive && setLoading(false))
@@ -118,6 +122,36 @@ export default function Review() {
       alive = false
     }
   }, [sel])
+
+  // D8-9：提交/撤除用户建议
+  async function submitSuggestion() {
+    if (!sel || sugBusy || !sugDraft.trim()) return
+    setSugBusy(true)
+    try {
+      const r = await api.addSuggestion(sel.path, sugDraft.trim())
+      setSuggestions(r.suggestions ?? [])
+      setSugDraft('')
+      setFlash('建议已记录：下一轮统一修复会带上它')
+      setTimeout(() => setFlash(''), 3000)
+    } catch (e) {
+      setError(`提交建议失败：${e.message}`)
+    } finally {
+      setSugBusy(false)
+    }
+  }
+
+  async function dropSuggestion(index) {
+    if (!sel || sugBusy) return
+    setSugBusy(true)
+    try {
+      const r = await api.removeSuggestion(sel.path, index)
+      setSuggestions(r.suggestions ?? [])
+    } catch (e) {
+      setError(`撤除建议失败：${e.message}`)
+    } finally {
+      setSugBusy(false)
+    }
+  }
 
   const act = async (action, note) => {
     if (!sel || busy) return
@@ -276,26 +310,51 @@ export default function Review() {
                 <MarkdownHost text={stripFm} onOpenPage={() => {}} />
               )}
             </div>
-            {/* v0.3 D6-7：audit 维护建议（suggestions frontmatter）展示 */}
-            {suggestions.length > 0 && (
-              <div className="audit-suggestions">
-                <div className="audit-suggestions-label">图谱自检建议（人工确认后处置：可复制为返修意见，或手动执行）</div>
-                {suggestions.map((s, i) => (
-                  <div key={i} className="audit-suggestion-item">
-                    <span className={`audit-sug-origin ${s.origin}`}>{s.origin === 'audit' ? 'AI' : '我'}</span>
-                    <span className="audit-sug-note">{s.note}</span>
-                    {s.action && <span className="audit-sug-action">{s.action}</span>}
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      title="把这条建议转成返修意见，交给 LLM 集中执行"
-                      onClick={() => setReworkNote((n) => (n ? `${n}\n${s.note}` : s.note))}
-                    >
-                      转返修
-                    </button>
-                  </div>
-                ))}
+            {/* v0.3 D6-7 + D8-9：维护建议（audit 自检建议 + 用户留的建议）同池展示 */}
+            <div className="audit-suggestions">
+              <div className="audit-suggestions-label">
+                维护建议（图谱自检的 AI 建议 + 你留的意见；「转返修」交给 LLM 执行，或留给下一轮统一修复）
               </div>
-            )}
+              {suggestions.length === 0 && (
+                <div className="audit-sug-empty mono">暂无建议——AI 自检（图谱页「🩺 图谱自检」）或下方直接留言</div>
+              )}
+              {suggestions.map((s, i) => (
+                <div key={i} className="audit-suggestion-item">
+                  <span className={`audit-sug-origin ${s.origin}`}>{s.origin === 'audit' ? 'AI' : '我'}</span>
+                  <span className="audit-sug-note">{s.note}</span>
+                  {s.action && <span className="audit-sug-action">{s.action}</span>}
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    title="把这条建议转成返修意见，交给 LLM 集中执行"
+                    onClick={() => setReworkNote((n) => (n ? `${n}\n${s.note}` : s.note))}
+                  >
+                    转返修
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    title="撤除这条建议"
+                    disabled={sugBusy}
+                    onClick={() => dropSuggestion(i)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              <div className="audit-sug-form">
+                <input
+                  className="input"
+                  placeholder="给这个页面留一条维护建议，如：补充与[[卡片盒笔记法]]的关联；这段过时了请联网更新"
+                  value={sugDraft}
+                  onChange={(e) => setSugDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') submitSuggestion()
+                  }}
+                />
+                <button className="btn btn-secondary btn-sm" disabled={sugBusy || !sugDraft.trim()} onClick={submitSuggestion}>
+                  {sugBusy ? '提交中…' : '留言'}
+                </button>
+              </div>
+            </div>
             {/* 返修意见区：提交进池 / 已有意见回显 */}
             <div className="rework-form">
               <label className="field-label" htmlFor="rework-note">返修意见（驳回之外的柔性处置：说明哪里要改，攒一批后统一让 LLM 修复）</label>

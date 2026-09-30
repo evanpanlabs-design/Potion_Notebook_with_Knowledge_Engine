@@ -23,6 +23,7 @@ import { startScheduler, type SchedulerHandle } from './scheduler.ts'
 import { createDigestRunner } from './digest-runner.ts'
 import { listInbox, readInboxItem, digestInboxItem } from './inbox.ts'
 import { runAudit, getAuditState } from './audit-pipeline.ts'
+import { addUserSuggestion, removeSuggestion, readSuggestions } from './suggest.ts'
 import {
   readMineruKey, writeMineruKey, maskMineruKey, checkUploadQuota,
   testMineruConnectivity, uploadFilesToMineru, pollBatchResults, fetchMarkdownFromZip,
@@ -735,6 +736,46 @@ app.get('/api/v1/graph/suggestions', async () => {
   return { pages: out }
 })
 
+// ---------- D8-9：人工维护建议（suggestions 泛化：用户可留，与 audit 同池） ----------
+
+interface UserSuggestionBody {
+  note?: string
+}
+
+app.get('/api/v1/pages/*/suggestions', async (req, reply) => {
+  const rel = (req.params as { '*': string })['*']
+  try {
+    return { suggestions: await readSuggestions(KB_ROOT, rel) }
+  } catch (e) {
+    return reply.code(400).send({ error: String((e as Error).message ?? e) })
+  }
+})
+
+app.post('/api/v1/pages/*/suggestions', async (req, reply) => {
+  const rel = (req.params as { '*': string })['*']
+  const body = req.body as UserSuggestionBody
+  try {
+    const suggestions = await addUserSuggestion(KB_ROOT, rel, String(body?.note ?? ''))
+    const title = rel.split('/').pop()?.replace(/\.md$/, '') ?? rel
+    await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('review', `留建议 ${title}`), 'utf8')
+    return { suggestions }
+  } catch (e) {
+    const msg = String((e as Error).message ?? e)
+    return reply.code(msg.includes('ENOENT') ? 404 : 400).send({ error: msg })
+  }
+})
+
+app.delete('/api/v1/pages/*/suggestions/:index', async (req, reply) => {
+  const rel = (req.params as { '*': string; index: string })['*']
+  const index = Number((req.params as { index: string }).index)
+  try {
+    const suggestions = await removeSuggestion(KB_ROOT, rel, index)
+    return { suggestions }
+  } catch (e) {
+    return reply.code(400).send({ error: String((e as Error).message ?? e) })
+  }
+})
+
 /** 图谱数据（F7 前端直接消费） */
 app.get('/api/v1/graph', async () => buildGraphData(KB_ROOT))
 
@@ -1134,14 +1175,15 @@ interface ReworkRunBody {
 }
 
 app.post('/api/v1/review/rework-run', async (req, reply) => {
-  const body = req.body as ReworkRunBody
+  const body = req.body as ReworkRunBody & { includeSuggestions?: boolean }
   const all = await listWikiPages()
   const pool = body?.items?.length
     ? body.items
     : all
         .filter((p) => !p.reviewed && (p as unknown as { rework?: { status?: string } }).rework?.status === 'pending')
         .map((p) => ({ path: p.path, note: '' }))
-  // note 需要从页面 fm 里取（列表项没有 rework 全文时）
+  // note 需要从页面 fm 里取（列表项没有 rework 全文时）；
+  // D8-9：includeSuggestions=true 时把 suggestions[]（audit + user 建议）也并入本轮执行
   const items: Array<{ path: string; note: string }> = []
   for (const it of pool) {
     let note = it.note ?? ''
@@ -1152,6 +1194,18 @@ app.post('/api/v1/review/rework-run', async (req, reply) => {
       } catch { /* 页面已删则跳过 */ }
     }
     if (note) items.push({ path: it.path, note })
+  }
+  // suggestions 并入（同页多建议合并为一条 note；audit 建议附 action 说明）
+  if (body?.includeSuggestions) {
+    for (const p of all) {
+      if (items.some((i) => i.path === p.path)) continue
+      const sug = await readSuggestions(KB_ROOT, p.path)
+      if (sug.length === 0) continue
+      const note = sug
+        .map((s) => (s.action ? `[${s.action}${s.peer ? ` ${s.peer}` : ''}] ${s.note}` : s.note))
+        .join('\n')
+      items.push({ path: p.path, note })
+    }
   }
   if (items.length === 0) return reply.code(400).send({ error: '返修池为空（或全部缺修改意见）' })
   if (getReworkState().running) return reply.code(409).send({ error: '已有批量修复在运行中' })

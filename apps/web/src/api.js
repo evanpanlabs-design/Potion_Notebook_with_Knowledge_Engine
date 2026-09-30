@@ -66,8 +66,11 @@ export const api = {
   listInbox: () => j('/api/inbox'),
   readInbox: (rel) => j(`/api/${rel.replace(/^inbox\//, 'inbox/')}`),
   digestInbox: (rel) => post(`/api/${rel.replace(/^inbox\//, 'inbox/')}/digest`, {}),
-  // ---- v0.3 · graph audit（ADR-003 D6-7） ----
+  // ---- v0.3 · graph audit（ADR-003 D6-7）+ 人工建议（D8-9） ----
   startAudit: () => post('/api/graph/audit', {}),
   auditStatus: () => j('/api/graph/audit/status'),
   auditSuggestions: () => j('/api/graph/suggestions'),
+  pageSuggestions: (rel) => j(`/api/pages/${rel}/suggestions`),
+  addSuggestion: (rel, note) => post(`/api/pages/${rel}/suggestions`, { note }),
+  removeSuggestion: (rel, index) => j(`/api/pages/${rel}/suggestions/${index}`, { method: 'DELETE' }),
 }
