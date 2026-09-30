@@ -2,11 +2,13 @@ import React, { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import MarkdownHost from './MarkdownHost.jsx'
 
-/** 总览页：库状态统计 + index 目录（库的门面 index.md 五段目录渲染） */
+/** 总览页：库状态统计 + 定时任务 + index 目录（库的门面 index.md 五段目录渲染） */
 export default function Overview({ onOpenPage, go }) {
   const [status, setStatus] = useState(null)
   const [indexPage, setIndexPage] = useState(null)
   const [logEntries, setLogEntries] = useState([])
+  const [tasks, setTasks] = useState(null)
+  const [taskBusy, setTaskBusy] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -23,6 +25,10 @@ export default function Overview({ onOpenPage, go }) {
       .log()
       .then((r) => alive && setLogEntries(r.entries.slice(0, 8)))
       .catch(() => {} /* log.md 不存在时静默 */)
+    api
+      .listTasks()
+      .then((r) => alive && setTasks(r.tasks))
+      .catch(() => alive && setTasks([]))
     return () => {
       alive = false
     }
@@ -69,6 +75,37 @@ export default function Overview({ onOpenPage, go }) {
         </div>
       )}
 
+      {tasks && tasks.length > 0 && (
+        <section className="card">
+          <h3 className="doc-label">定时任务 · AI 自动执行中</h3>
+          <TaskList
+            tasks={tasks}
+            busy={taskBusy}
+            onToggle={async (t) => {
+              setTaskBusy(t.id)
+              try {
+                const r = await api.toggleTask(t.id, !t.enabled)
+                setTasks((ts) => ts.map((x) => (x.id === t.id ? r.task : x)))
+              } catch { /* ignore */ } finally { setTaskBusy('') }
+            }}
+            onRun={async (t) => {
+              setTaskBusy(t.id)
+              try {
+                const r = await api.runTaskNow(t.id)
+                if (r.task) setTasks((ts) => ts.map((x) => (x.id === t.id ? r.task : x)))
+              } catch { /* ignore */ } finally { setTaskBusy('') }
+            }}
+            onDelete={async (t) => {
+              setTaskBusy(t.id)
+              try {
+                await api.deleteTask(t.id)
+                setTasks((ts) => ts.filter((x) => x.id !== t.id))
+              } catch { /* ignore */ } finally { setTaskBusy('') }
+            }}
+          />
+        </section>
+      )}
+
       {logEntries.length > 0 && (
         <section className="card">
           <h3 className="doc-label">最近动态 · log.md 流水</h3>
@@ -97,4 +134,69 @@ export default function Overview({ onOpenPage, go }) {
 /** index.md 渲染：wikilink 可点击 */
 function IndexBody({ text, onOpenPage }) {
   return <MarkdownHost text={text} onOpenPage={onOpenPage} />
+}
+
+/** 定时任务列表：排程 + 下次执行 + 最近结果 + 开关/立即运行/删除 */
+const OUTCOME_LABEL = {
+  ok: ['成功', 'outcome-ok'],
+  'caught-up': ['补做', 'outcome-ok'],
+  skipped: ['已放弃', 'outcome-skip'],
+  error: ['失败', 'outcome-err'],
+  manual: ['手动', 'outcome-ok'],
+}
+
+function TaskList({ tasks, busy, onToggle, onRun, onDelete }) {
+  return (
+    <div className="task-list">
+      {tasks.map((t) => {
+        const [label, cls] = OUTCOME_LABEL[t.lastOutcome] ?? [t.lastOutcome ?? '未运行', '']
+        return (
+          <div key={t.id} className={`task-row${t.enabled ? '' : ' disabled'}`}>
+            <div className="task-main">
+              <div className="task-title">
+                {t.title}
+                {!t.enabled && <span className="task-tag">已停用</span>}
+              </div>
+              <div className="task-meta">
+                <span className="task-schedule">{t.scheduleDesc}</span>
+                {t.enabled && t.nextDueIn && <span>下次 {t.nextDueIn}</span>}
+                {t.lastOutcome && (
+                  <span className={`task-outcome ${cls}`} title={t.lastNote || ''}>
+                    最近：{label}
+                    {t.lastRunAgo ? `（${t.lastRunAgo}）` : ''}
+                  </span>
+                )}
+              </div>
+              {t.lastArtifact && <div className="mono task-artifact">产出 {t.lastArtifact}</div>}
+            </div>
+            <div className="task-actions">
+              <button
+                className="btn btn-sm"
+                disabled={busy === t.id || !t.enabled}
+                title="立即执行一次"
+                onClick={() => onRun(t)}
+              >
+                运行
+              </button>
+              <button
+                className="btn btn-sm"
+                disabled={busy === t.id}
+                onClick={() => onToggle(t)}
+                title={t.enabled ? '停用' : '启用'}
+              >
+                {t.enabled ? '停用' : '启用'}
+              </button>
+              <button
+                className="btn btn-sm btn-danger-ghost"
+                disabled={busy === t.id}
+                onClick={() => onDelete(t)}
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
 }

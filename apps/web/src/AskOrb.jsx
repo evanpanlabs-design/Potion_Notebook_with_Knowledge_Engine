@@ -29,6 +29,10 @@ export default function AskOrb({ onOpenPage }) {
   const doneRef = useRef(false) // POST 返回后不再接受迟到的 delta（避免覆盖归一化后的最终稿）
   // 拖拽位置：ball / input / window 三种形态各自记忆（null = 用 CSS 默认右下角）
   const [pos, setPos] = useState({ ball: null, input: null, window: null })
+  // v0.3 定时任务意图（ADR-003 D2-3）：解析命中后弹确认卡片，用户确认→建任务
+  const [scheduleDraft, setScheduleDraft] = useState(null) // { title, topic, query, schedule, scheduleDesc }
+  const [scheduleBusy, setScheduleBusy] = useState(false)
+  const [scheduleNote, setScheduleNote] = useState('')
 
   // ---- 长按拖拽 ----
   // 按下后移动超过 4px 进入拖拽（普通点击不受影响）；拖完的 click 事件被吞掉，
@@ -142,6 +146,22 @@ export default function AskOrb({ onOpenPage }) {
     doneRef.current = false
     setBusy(true)
     setMode('window')
+    // 定时意图识别（ADR-003 §3.2）：「每天 7 点搜 AI 资讯」→ 确认卡片 → cron 任务。
+    // 解析失败/非定时意图不拦截提问（降级为普通问答）
+    try {
+      const p = await api.parseTaskIntent(q).catch(() => null)
+      if (p?.isSchedule) {
+        setScheduleDraft({
+          title: p.title,
+          topic: p.topic,
+          query: p.query,
+          schedule: p.schedule,
+          scheduleDesc: p.scheduleDesc,
+        })
+        setBusy(false)
+        return // 不走问答；用户取消后可重新发送
+      }
+    } catch { /* 解析失败降级为普通问答 */ }
     try {
       const r = await api.query(q)
       doneRef.current = true
@@ -161,6 +181,31 @@ export default function AskOrb({ onOpenPage }) {
     }
   }
 
+  async function confirmSchedule() {
+    if (!scheduleDraft || scheduleBusy) return
+    setScheduleBusy(true)
+    setScheduleNote('')
+    try {
+      await api.createTask(scheduleDraft)
+      setScheduleNote('✓ 已创建定时任务，到点自动运行；错过 24h 内会在下次启动时补做一次')
+      setTimeout(() => {
+        setScheduleDraft(null)
+        setScheduleNote('')
+        setMode('ball')
+      }, 2000)
+    } catch (e) {
+      setScheduleNote(`创建失败：${e.message}`)
+    } finally {
+      setScheduleBusy(false)
+    }
+  }
+
+  function cancelSchedule() {
+    setScheduleDraft(null)
+    setScheduleNote('')
+    setMode('input')
+  }
+
   function reset() {
     setMode('ball')
     setQuestion('')
@@ -171,6 +216,8 @@ export default function AskOrb({ onOpenPage }) {
     setError('')
     setBusy(false)
     doneRef.current = true
+    setScheduleDraft(null)
+    setScheduleNote('')
   }
 
   // ---- 悬浮球：有内容时点球回到窗口，否则展开输入框 ----
@@ -233,6 +280,32 @@ export default function AskOrb({ onOpenPage }) {
       </div>
       <div className="ask-orb-body" ref={bodyRef}>
         <div className="ask-orb-q">{currentQ}</div>
+        {scheduleDraft && (
+          <div className="card ask-orb-schedule">
+            <h3 style={{ fontFamily: 'var(--font-display)', margin: '0 0 8px', fontSize: '1rem' }}>
+              ⏱ 创建定时任务？
+            </h3>
+            <p style={{ margin: '0 0 10px', color: 'var(--c-text-2)' }}>
+              这不是一次性提问——AI 将<strong>{scheduleDraft.scheduleDesc}</strong>自动执行：
+            </p>
+            <div className="schedule-draft-rows mono">
+              <div>主题：{scheduleDraft.topic}</div>
+              <div>排程：{scheduleDraft.scheduleDesc}</div>
+              {scheduleDraft.query && <div>搜索词：{scheduleDraft.query}</div>}
+              <div>产出：快报自动进入收件箱（不进知识图谱，可手动消化）</div>
+            </div>
+            <div className="ask-orb-input-foot" style={{ marginTop: 12 }}>
+              <span className="mono">{scheduleNote || '确认后 AI 按时自动执行'}</span>
+              <span style={{ flex: 1 }} />
+              <button className="btn btn-secondary btn-sm" disabled={scheduleBusy} onClick={cancelSchedule}>
+                取消，改为普通提问
+              </button>
+              <button className="btn btn-primary btn-sm" disabled={scheduleBusy} onClick={confirmSchedule}>
+                {scheduleBusy ? '创建中…' : '创建任务'}
+              </button>
+            </div>
+          </div>
+        )}
         {error && <div className="banner banner-danger">查询失败：{error}</div>}
         {outcome?.noEvidence ? (
           <div className="banner banner-warning">

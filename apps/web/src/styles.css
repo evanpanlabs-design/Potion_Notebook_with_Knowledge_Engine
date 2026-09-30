@@ -1003,3 +1003,82 @@ span.wikilink {
   line-height: 1.6;
   background: #fff;
 }
+
+/* ---- v0.3 D2-3：定时任务（AskOrb 确认卡片 + 总览任务列表） ---- */
+
+/* AskOrb 定时意图确认卡片 */
+.ask-orb-schedule {
+  margin-bottom: 12px;
+  border: 1px solid var(--c-primary, #3b82f6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+.ask-orb-schedule p { margin: 0 0 8px; }
+.schedule-draft-rows {
+  background: var(--c-bg-2, #f8fafc);
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 0 0 10px;
+}
+
+/* 总览页任务列表 */
+.task-list { display: flex; flex-direction: column; }
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid #eef2f6;
+}
+.task-row:last-child { border-bottom: none; }
+.task-row.disabled .task-title { color: var(--c-text-3, #94a3b8); }
+.task-main { flex: 1; min-width: 0; }
+.task-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.task-tag {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--c-text-3, #94a3b8);
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0 6px;
+  vertical-align: 1px;
+}
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--c-text-2, #475569);
+}
+.task-schedule {
+  color: var(--c-primary, #3b82f6);
+  font-weight: 600;
+}
+.task-outcome.outcome-ok { color: #059669; }
+.task-outcome.outcome-skip { color: #94a3b8; }
+.task-outcome.outcome-err { color: #dc2626; }
+.task-artifact {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--c-text-3, #94a3b8);
+}
+.task-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.btn-danger-ghost {
+  color: #dc2626;
+  border-color: #fecdd3;
+}
+.btn-danger-ghost:hover:not(:disabled) {
+  background: #fef2f2;
+}

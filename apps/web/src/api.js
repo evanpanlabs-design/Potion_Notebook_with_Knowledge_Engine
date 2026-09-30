@@ -55,4 +55,11 @@ export const api = {
   saveTavilyConfig: (payload) => post('/api/tavily/config', payload),
   testTavily: (apiKey) => post('/api/tavily/config/test', { apiKey }),
   agentQuery: (question) => post('/api/agent-query', { question }),
+  // ---- v0.3 · 定时任务（ADR-003 D2-3） ----
+  parseTaskIntent: (text) => post('/api/tasks/parse', { text }),
+  listTasks: () => j('/api/tasks'),
+  createTask: (payload) => post('/api/tasks', payload),
+  deleteTask: (id) => j(`/api/tasks/${id}`, { method: 'DELETE' }),
+  toggleTask: (id, enabled) => post(`/api/tasks/${id}`, { enabled }),
+  runTaskNow: (id) => post(`/api/tasks/${id}/run`, {}),
 }

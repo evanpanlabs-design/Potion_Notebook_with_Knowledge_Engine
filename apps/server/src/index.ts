@@ -9,6 +9,8 @@ import { EventEmitter } from 'node:events'
 import process from 'node:process'
 
 import { initKb, scanKb, parsePage, renderLogEntry, serializePage } from '@ke/core'
+import { normalizeSchedule, describeSchedule, describeRelative, type ScheduledTask } from '@ke/core'
+import { parseLlmJson } from '@ke/core'
 import { createRouting, collectText } from '@ke/agent-tools'
 import { ingestSource, gitCommitAll } from './ingest-pipeline.ts'
 import { answerQuery, buildGraphData } from './query-pipeline.ts'
@@ -17,6 +19,8 @@ import { resolveTavilyConfig, saveTavilyConfig, TAVILY_MONTHLY_LIMIT, type Tavil
 import { createTavilyClient } from '@ke/agent-tools'
 import { resolveLlmConfig, saveLlmConfig, maskApiKey, mergeApiKey, type LlmConfigFile, type LlmRoleConfig } from './llm-config.ts'
 import { syncPage, runReworkBatch, getReworkState } from './maintain-pipeline.ts'
+import { startScheduler, type SchedulerHandle } from './scheduler.ts'
+import { createDigestRunner } from './digest-runner.ts'
 import {
   readMineruKey, writeMineruKey, maskMineruKey, checkUploadQuota,
   testMineruConnectivity, uploadFilesToMineru, pollBatchResults, fetchMarkdownFromZip,
@@ -508,6 +512,143 @@ app.post('/api/v1/agent-query', async (req, reply) => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// 定时任务（ADR-003 D2-3）：意图解析 + CRUD + 手动触发；调度器在 listen 后启动
+// ---------------------------------------------------------------------------
+
+let scheduler: SchedulerHandle | null = null
+
+const PARSE_PROMPT = `你是任务意图解析器。判断用户输入是否是「定时任务请求」（让 AI 周期性自动执行的事，如每天搜资讯生成日报），并提取结构化字段。
+
+只输出一个 JSON 对象（不要多余文本）：
+{
+  "isSchedule": true,
+  "kind": "digest",
+  "title": "简短任务名（12字内）",
+  "topic": "搜索主题（如：AI 资讯）",
+  "query": "可选：具体搜索词，用户没给就省略该字段",
+  "schedule": { "type": "daily", "at": "07:00" }
+}
+
+schedule 只有两种形状：每天定时 { "type": "daily", "at": "HH:MM" }（24小时制）；固定间隔 { "type": "interval", "hours": N }。
+
+判断规则：
+- 「每天早上7点搜AI资讯」「每晚十点给我份日报」→ isSchedule=true
+- 「每小时」「每6小时」→ interval；小时数取用户说的，没说默认 1
+- 「每天」但没给时刻 → at 默认 "08:00"
+- 只是一次性提问（哪怕提到“最新资讯”，但没有周期性词）→ isSchedule=false，其余字段省略
+- kind 目前只有 "digest"（搜索/资讯/日报/快报类）；非搜索类也先置 digest 并在 topic 里描述`
+
+interface TaskParseBody { text?: string }
+
+/** 意图解析：文本 → 结构化任务定义（便宜模型，ingest 路由） */
+app.post('/api/v1/tasks/parse', async (req, reply) => {
+  const body = req.body as TaskParseBody
+  const text = body?.text?.trim()
+  if (!text) return reply.code(400).send({ error: '需要 text' })
+  try {
+    const routing = await llmRouting()
+    const { text: raw } = await collectText(
+      routing.stream('ingest', PARSE_PROMPT, [{ role: 'user', text: `用户输入：${text}` }]),
+    )
+    const parsed = parseLlmJson<{
+      isSchedule?: boolean
+      kind?: string
+      title?: string
+      topic?: string
+      query?: string
+      schedule?: unknown
+    }>(raw)
+    if (!parsed?.isSchedule) return { isSchedule: false }
+    const schedule = normalizeSchedule(parsed.schedule)
+    if (!schedule) {
+      return { isSchedule: false, note: '未能解析出有效的排程时刻，请直接向知识库提问' }
+    }
+    return {
+      isSchedule: true,
+      kind: 'digest' as const,
+      title: (parsed.title ?? text.slice(0, 12)).slice(0, 60),
+      topic: (parsed.topic ?? text.slice(0, 40)).slice(0, 120),
+      query: parsed.query?.slice(0, 200),
+      schedule,
+      scheduleDesc: describeSchedule(schedule),
+    }
+  } catch (e) {
+    // 解析失败不拦截提问：降级为普通问答
+    return { isSchedule: false, note: `意图解析失败：${(e as Error).message.slice(0, 120)}` }
+  }
+})
+
+interface TaskCreateBody {
+  title?: string
+  topic?: string
+  query?: string
+  schedule?: unknown
+  enabled?: boolean
+}
+
+function taskView(t: ScheduledTask) {
+  return {
+    ...t,
+    scheduleDesc: describeSchedule(t.schedule),
+    nextDueIn: t.nextDue ? describeRelative(t.nextDue) : null,
+    lastRunAgo: t.lastRunAt ? describeRelative(t.lastRunAt) : null,
+    lastOutcome: t.history[0]?.outcome ?? null,
+    lastNote: t.history[0]?.note ?? null,
+    lastArtifact: t.history[0]?.artifact ?? null,
+  }
+}
+
+app.get('/api/v1/tasks', async () => {
+  if (!scheduler) return { tasks: [] }
+  const tasks = await scheduler.store.list()
+  return { tasks: tasks.map(taskView) }
+})
+
+app.post('/api/v1/tasks', async (req, reply) => {
+  if (!scheduler) return reply.code(503).send({ error: '调度器未就绪' })
+  const body = req.body as TaskCreateBody
+  const schedule = normalizeSchedule(body?.schedule)
+  if (!schedule) return reply.code(400).send({ error: 'schedule 无效：需要 { type: daily, at: HH:MM } 或 { type: interval, hours: N }' })
+  if (!body?.topic?.trim()) return reply.code(400).send({ error: '需要 topic' })
+  const task = await scheduler.store.create({
+    kind: 'digest',
+    title: body.title?.trim() || body.topic.trim().slice(0, 12),
+    topic: body.topic.trim(),
+    query: body.query?.trim() || undefined,
+    schedule,
+    enabled: body.enabled ?? true,
+  })
+  return { task: taskView(task) }
+})
+
+app.delete('/api/v1/tasks/:id', async (req, reply) => {
+  if (!scheduler) return reply.code(503).send({ error: '调度器未就绪' })
+  const ok = await scheduler.store.remove((req.params as { id: string }).id)
+  if (!ok) return reply.code(404).send({ error: '任务不存在' })
+  return { ok: true }
+})
+
+app.post('/api/v1/tasks/:id', async (req, reply) => {
+  if (!scheduler) return reply.code(503).send({ error: '调度器未就绪' })
+  const body = req.body as { enabled?: boolean }
+  if (typeof body?.enabled !== 'boolean') return reply.code(400).send({ error: '需要 enabled 布尔值' })
+  const t = await scheduler.store.setEnabled((req.params as { id: string }).id, body.enabled)
+  if (!t) return reply.code(404).send({ error: '任务不存在' })
+  return { task: taskView(t) }
+})
+
+app.post('/api/v1/tasks/:id/run', async (req, reply) => {
+  if (!scheduler) return reply.code(503).send({ error: '调度器未就绪' })
+  try {
+    const rec = await scheduler.runNow((req.params as { id: string }).id)
+    const t = await scheduler.store.get((req.params as { id: string }).id)
+    return { record: rec, task: t ? taskView(t) : null }
+  } catch (e) {
+    return reply.code(500).send({ error: (e as Error).message })
+  }
+})
+
 /** 图谱数据（F7 前端直接消费） */
 app.get('/api/v1/graph', async () => buildGraphData(KB_ROOT))
 
@@ -983,6 +1124,10 @@ const SSE_EVENTS = [
   'query:start',
   'query:delta',
   'query:done',
+  'task:started',
+  'task:done',
+  'task:error',
+  'task:skipped',
 ] as const
 
 app.get('/api/v1/events', (req, reply) => {
@@ -1017,6 +1162,10 @@ app.get('/api/v1/events', (req, reply) => {
 app.listen({ port: PORT, host: '127.0.0.1' }).then(async () => {
 await mkdir(KB_ROOT, { recursive: true })
 await ensureKbGit(KB_ROOT)
+// 定时任务调度器（ADR-003 D2-3）：启动即扫一轮（错过补偿在此生效）
+const runners = new Map()
+runners.set('digest', createDigestRunner({ kbRoot: KB_ROOT, dataRoot: DATA_ROOT }))
+scheduler = startScheduler({ dataRoot: DATA_ROOT, kbRoot: KB_ROOT, runners, events: bus })
 // 过期 query 遗忘（GC）：启动即清理一次，之后每小时巡检
 const { gcExpiredQueries } = await import('./query-pipeline.ts')
 gcExpiredQueries(KB_ROOT).then((n) => n.length > 0 && console.log(`[gc] 遗忘 ${n.length} 条过期 query：${n.join(', ')}`)).catch(() => {})
