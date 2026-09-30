@@ -155,6 +155,7 @@ function TaskList({ tasks, busy, onToggle, onRun, onDelete }) {
             <div className="task-main">
               <div className="task-title">
                 {t.title}
+                {t.kind === 'agent' && <span className="task-tag task-tag-agent">Agent</span>}
                 {!t.enabled && <span className="task-tag">已停用</span>}
               </div>
               <div className="task-meta">
@@ -169,6 +170,9 @@ function TaskList({ tasks, busy, onToggle, onRun, onDelete }) {
               </div>
               {t.lastOutcome === 'error' && t.lastNote && (
                 <div className="task-error-note">⚠ {t.lastNote}</div>
+              )}
+              {t.kind === 'agent' && t.prompt && (
+                <div className="task-prompt" title={t.prompt}>🎯 {t.prompt}</div>
               )}
               {t.lastArtifact && <div className="mono task-artifact">产出 {t.lastArtifact}</div>}
             </div>

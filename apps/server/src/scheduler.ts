@@ -87,13 +87,22 @@ export class TaskStore {
     return this.list().then((ts) => ts.find((t) => t.id === id))
   }
 
-  create(input: { kind: 'digest'; title: string; topic: string; query?: string; schedule: TaskSchedule; enabled?: boolean }): Promise<ScheduledTask> {
+  create(input: {
+    kind: 'digest' | 'agent'
+    title: string
+    topic: string
+    query?: string
+    prompt?: string
+    schedule: TaskSchedule
+    enabled?: boolean
+  }): Promise<ScheduledTask> {
     const task: ScheduledTask = {
       id: `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       kind: input.kind,
       title: input.title.slice(0, 60),
       topic: input.topic.slice(0, 120),
       query: input.query?.slice(0, 200),
+      prompt: input.prompt?.slice(0, 2000),
       schedule: input.schedule,
       enabled: input.enabled ?? true,
       createdAt: new Date().toISOString(),

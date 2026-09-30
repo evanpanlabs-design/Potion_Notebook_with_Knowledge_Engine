@@ -35,16 +35,21 @@ export interface TaskRunRecord {
   artifact?: string
 }
 
-/** 定时任务定义（data/tasks.json 的一条） */
+/** 定时任务定义（data/tasks.json 的一条）
+ *  kind 两种：
+ *  - digest：专用日报管线（Tavily → 证据页 → LLM 综合）
+ *  - agent：到点唤醒一个子 Agent（完整 agent loop + 工具白名单），自由目标
+ */
 export interface ScheduledTask {
   id: string
-  /** 任务模板：digest 日报（D4-5 扩展 audit / 更多） */
-  kind: 'digest'
+  kind: 'digest' | 'agent'
   title: string
-  /** digest 的搜索主题 */
+  /** digest：搜索主题；agent：任务短标签 */
   topic: string
-  /** 可选自定义搜索词（缺省用 topic） */
+  /** 可选自定义搜索词（仅 digest 用；缺省用 topic） */
   query?: string
+  /** agent 任务的目标描述（唤醒子 Agent 时的用户提示，自由文本） */
+  prompt?: string
   schedule: TaskSchedule
   enabled: boolean
   createdAt: string

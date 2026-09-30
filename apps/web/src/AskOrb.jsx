@@ -155,6 +155,8 @@ export default function AskOrb({ onOpenPage }) {
           title: p.title,
           topic: p.topic,
           query: p.query,
+          prompt: p.prompt,
+          kind: p.kind === 'agent' ? 'agent' : 'digest',
           schedule: p.schedule,
           scheduleDesc: p.scheduleDesc,
         })
@@ -251,14 +253,14 @@ export default function AskOrb({ onOpenPage }) {
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
               e.preventDefault()
               send()
             }
           }}
         />
         <div className="ask-orb-input-foot">
-          <span className="mono">Enter 发送 · Esc 收起</span>
+          <span className="mono">⌘/Ctrl + Enter 发送 · Esc 收起</span>
           <button className="btn btn-primary btn-sm" disabled={!question.trim() || busy} onClick={send}>
             发送
           </button>
@@ -289,10 +291,12 @@ export default function AskOrb({ onOpenPage }) {
               这不是一次性提问——AI 将<strong>{scheduleDraft.scheduleDesc}</strong>自动执行：
             </p>
             <div className="schedule-draft-rows mono">
+              <div>类型：{scheduleDraft.kind === 'agent' ? 'Agent 任务（唤醒子 Agent 多步执行）' : '日报快报（联网搜索 → 收件箱）'}</div>
               <div>主题：{scheduleDraft.topic}</div>
               <div>排程：{scheduleDraft.scheduleDesc}</div>
-              {scheduleDraft.query && <div>搜索词：{scheduleDraft.query}</div>}
-              <div>产出：快报自动进入收件箱（不进知识图谱，可手动消化）</div>
+              {scheduleDraft.kind === 'agent' && scheduleDraft.prompt && <div>目标：{scheduleDraft.prompt}</div>}
+              {scheduleDraft.kind !== 'agent' && scheduleDraft.query && <div>搜索词：{scheduleDraft.query}</div>}
+              <div>产出：自动进入收件箱（不进知识图谱，可手动消化）</div>
             </div>
             <div className="ask-orb-input-foot" style={{ marginTop: 12 }}>
               <span className="mono">{scheduleNote || '确认后 AI 按时自动执行'}</span>
@@ -355,7 +359,7 @@ export default function AskOrb({ onOpenPage }) {
           disabled={busy}
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') send()
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send()
           }}
         />
         <button className="btn btn-primary" disabled={busy || !question.trim()} onClick={send}>

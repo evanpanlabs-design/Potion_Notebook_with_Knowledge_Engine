@@ -21,6 +21,7 @@ import { resolveLlmConfig, saveLlmConfig, maskApiKey, mergeApiKey, type LlmConfi
 import { syncPage, runReworkBatch, getReworkState } from './maintain-pipeline.ts'
 import { startScheduler, type SchedulerHandle } from './scheduler.ts'
 import { createDigestRunner } from './digest-runner.ts'
+import { createAgentRunner } from './agent-runner.ts'
 import { listInbox, readInboxItem, digestInboxItem } from './inbox.ts'
 import { runAudit, getAuditState } from './audit-pipeline.ts'
 import { addUserSuggestion, removeSuggestion, readSuggestions } from './suggest.ts'
@@ -523,7 +524,7 @@ app.post('/api/v1/agent-query', async (req, reply) => {
 
 let scheduler: SchedulerHandle | null = null
 
-const PARSE_PROMPT = `你是任务意图解析器。判断用户输入是否是「定时任务请求」（让 AI 周期性自动执行的事，如每天搜资讯生成日报），并提取结构化字段。
+const PARSE_PROMPT = `你是任务意图解析器。判断用户输入是否是「定时任务请求」（让 AI 周期性自动执行的事），并提取结构化字段。
 
 只输出一个 JSON 对象（不要多余文本）：
 {
@@ -532,17 +533,22 @@ const PARSE_PROMPT = `你是任务意图解析器。判断用户输入是否是�
   "title": "简短任务名（12字内）",
   "topic": "搜索主题（如：AI 资讯）",
   "query": "可选：具体搜索词，用户没给就省略该字段",
+  "prompt": "可选：agent 任务的目标描述（完整句子，说清楚要做什么、产出什么）",
   "schedule": { "type": "daily", "at": "07:00" }
 }
+
+kind 两种：
+- "digest"：搜索/资讯/日报/快报类（联网搜索为主，产出快报）
+- "agent"：需要多步推理与自由发挥的任务（写周报、调研整理、检查知识库、对比总结、盯某个项目动态并给出建议等）。agent 任务把用户诉求改写成明确的目标描述放 prompt，topic 给个短标签
 
 schedule 只有两种形状：每天定时 { "type": "daily", "at": "HH:MM" }（24小时制）；固定间隔 { "type": "interval", "hours": N }。
 
 判断规则：
-- 「每天早上7点搜AI资讯」「每晚十点给我份日报」→ isSchedule=true
+- 「每天早上7点搜AI资讯」「每晚十点给我份日报」→ isSchedule=true, kind=digest
+- 「每周五下午写份知识库周报」「每6小时检查XX并给建议」→ isSchedule=true, kind=agent
 - 「每小时」「每6小时」→ interval；小时数取用户说的，没说默认 1
 - 「每天」但没给时刻 → at 默认 "08:00"
-- 只是一次性提问（哪怕提到“最新资讯”，但没有周期性词）→ isSchedule=false，其余字段省略
-- kind 目前只有 "digest"（搜索/资讯/日报/快报类）；非搜索类也先置 digest 并在 topic 里描述`
+- 只是一次性提问（哪怕提到“最新资讯”，但没有周期性词）→ isSchedule=false，其余字段省略`
 
 interface TaskParseBody { text?: string }
 
@@ -562,6 +568,7 @@ app.post('/api/v1/tasks/parse', async (req, reply) => {
       title?: string
       topic?: string
       query?: string
+      prompt?: string
       schedule?: unknown
     }>(raw)
     if (!parsed?.isSchedule) return { isSchedule: false }
@@ -569,12 +576,14 @@ app.post('/api/v1/tasks/parse', async (req, reply) => {
     if (!schedule) {
       return { isSchedule: false, note: '未能解析出有效的排程时刻，请直接向知识库提问' }
     }
+    const kind = parsed.kind === 'agent' ? ('agent' as const) : ('digest' as const)
     return {
       isSchedule: true,
-      kind: 'digest' as const,
+      kind,
       title: (parsed.title ?? text.slice(0, 12)).slice(0, 60),
       topic: (parsed.topic ?? text.slice(0, 40)).slice(0, 120),
       query: parsed.query?.slice(0, 200),
+      prompt: parsed.prompt?.slice(0, 2000),
       schedule,
       scheduleDesc: describeSchedule(schedule),
     }
@@ -585,9 +594,11 @@ app.post('/api/v1/tasks/parse', async (req, reply) => {
 })
 
 interface TaskCreateBody {
+  kind?: 'digest' | 'agent'
   title?: string
   topic?: string
   query?: string
+  prompt?: string
   schedule?: unknown
   enabled?: boolean
 }
@@ -616,11 +627,16 @@ app.post('/api/v1/tasks', async (req, reply) => {
   const schedule = normalizeSchedule(body?.schedule)
   if (!schedule) return reply.code(400).send({ error: 'schedule 无效：需要 { type: daily, at: HH:MM } 或 { type: interval, hours: N }' })
   if (!body?.topic?.trim()) return reply.code(400).send({ error: '需要 topic' })
+  const kind = body.kind === 'agent' ? 'agent' : 'digest'
+  if (kind === 'agent' && !body.prompt?.trim()) {
+    return reply.code(400).send({ error: 'agent 任务需要 prompt（任务目标描述）' })
+  }
   const task = await scheduler.store.create({
-    kind: 'digest',
+    kind,
     title: body.title?.trim() || body.topic.trim().slice(0, 12),
     topic: body.topic.trim(),
     query: body.query?.trim() || undefined,
+    prompt: body.prompt?.trim() || undefined,
     schedule,
     enabled: body.enabled ?? true,
   })
@@ -1391,6 +1407,16 @@ runners.set(
     dataRoot: DATA_ROOT,
     // LLM 路由懒解析：未配置时 runner 自行降级为原始快报（不 fail 任务）
     routing: await llmRouting().catch(() => undefined),
+  }),
+)
+// kind=agent：到点唤醒子 Agent（完整 loop + 工具白名单），自由目标任务
+runners.set(
+  'agent',
+  createAgentRunner({
+    kbRoot: KB_ROOT,
+    dataRoot: DATA_ROOT,
+    routing: await llmRouting().catch(() => undefined),
+    events: bus,
   }),
 )
 scheduler = startScheduler({ dataRoot: DATA_ROOT, kbRoot: KB_ROOT, runners, events: bus })
