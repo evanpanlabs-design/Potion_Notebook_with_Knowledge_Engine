@@ -1082,3 +1082,60 @@ span.wikilink {
 .btn-danger-ghost:hover:not(:disabled) {
   background: #fef2f2;
 }
+
+/* ---- v0.3 D4-5：收件箱 ---- */
+.inbox-list { display: flex; flex-direction: column; gap: 10px; }
+.inbox-item { padding: 0; overflow: hidden; }
+.inbox-item.open { border-color: var(--c-primary, #3b82f6); }
+.inbox-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 14px;
+}
+.inbox-head:hover { background: var(--c-bg-2, #f8fafc); }
+.inbox-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.inbox-dot.unread { background: var(--c-primary, #3b82f6); }
+.inbox-dot.digested { background: transparent; border: 1px solid #cbd5e1; }
+.inbox-title { font-weight: 600; }
+.inbox-topic {
+  font-size: 12px;
+  color: var(--c-text-3, #94a3b8);
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0 6px;
+}
+.inbox-meta { flex: 1; font-size: 12px; color: var(--c-text-3, #94a3b8); text-align: right; }
+.inbox-chevron { color: var(--c-text-3, #94a3b8); }
+.inbox-preview {
+  padding: 0 16px 12px 34px;
+  font-size: 13px;
+  color: var(--c-text-2, #475569);
+}
+.inbox-digested {
+  padding: 0 16px 10px 34px;
+  font-size: 11px;
+  color: #059669;
+}
+.inbox-body { border-top: 1px solid #eef2f6; padding: 14px 16px; }
+.inbox-body .markdown-body { max-height: 480px; overflow-y: auto; }
+.inbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eef2f6;
+}
+.inbox-action-note { font-size: 11px; color: var(--c-text-3, #94a3b8); }

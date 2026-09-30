@@ -62,4 +62,8 @@ export const api = {
   deleteTask: (id) => j(`/api/tasks/${id}`, { method: 'DELETE' }),
   toggleTask: (id, enabled) => post(`/api/tasks/${id}`, { enabled }),
   runTaskNow: (id) => post(`/api/tasks/${id}/run`, {}),
+  // ---- v0.3 · 收件箱（ADR-003 D4-5） ----
+  listInbox: () => j('/api/inbox'),
+  readInbox: (rel) => j(`/api/${rel.replace(/^inbox\//, 'inbox/')}`),
+  digestInbox: (rel) => post(`/api/${rel.replace(/^inbox\//, 'inbox/')}/digest`, {}),
 }

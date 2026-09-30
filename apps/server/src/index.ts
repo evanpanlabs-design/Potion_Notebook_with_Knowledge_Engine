@@ -21,6 +21,7 @@ import { resolveLlmConfig, saveLlmConfig, maskApiKey, mergeApiKey, type LlmConfi
 import { syncPage, runReworkBatch, getReworkState } from './maintain-pipeline.ts'
 import { startScheduler, type SchedulerHandle } from './scheduler.ts'
 import { createDigestRunner } from './digest-runner.ts'
+import { listInbox, readInboxItem, digestInboxItem } from './inbox.ts'
 import {
   readMineruKey, writeMineruKey, maskMineruKey, checkUploadQuota,
   testMineruConnectivity, uploadFilesToMineru, pollBatchResults, fetchMarkdownFromZip,
@@ -649,6 +650,34 @@ app.post('/api/v1/tasks/:id/run', async (req, reply) => {
   }
 })
 
+// ---------- D4-5：收件箱（inbox/ 只读 + 消化进图谱） ----------
+
+app.get('/api/v1/inbox', async () => {
+  return { items: await listInbox(KB_ROOT) }
+})
+
+app.get('/api/v1/inbox/*', async (req, reply) => {
+  const rel = (req.params as { '*': string })['*']
+  const item = await readInboxItem(KB_ROOT, `inbox/${rel}`)
+  if (!item) return reply.code(404).send({ error: '收件项不存在' })
+  return item
+})
+
+/** 消化进图谱：证据页走既有 ingest 管线（闸门/幂等/待审全部沿用） */
+app.post('/api/v1/inbox/*/digest', async (req, reply) => {
+  const rel = `inbox/${(req.params as { '*': string })['*']}`
+  try {
+    const routing = await llmRouting()
+    const outcome = await digestInboxItem({ kbRoot: KB_ROOT, routing }, rel)
+    if (outcome.writtenPages.length > 0 || outcome.alreadyDigested) {
+      await appendFile(path.join(KB_ROOT, 'log.md'), renderLogEntry('digest', `${rel} → ${outcome.digestOutcome}`.slice(0, 80)), 'utf8')
+    }
+    return outcome
+  } catch (e) {
+    return reply.code(500).send({ error: String((e as Error).message ?? e) })
+  }
+})
+
 /** 图谱数据（F7 前端直接消费） */
 app.get('/api/v1/graph', async () => buildGraphData(KB_ROOT))
 
@@ -1164,7 +1193,15 @@ await mkdir(KB_ROOT, { recursive: true })
 await ensureKbGit(KB_ROOT)
 // 定时任务调度器（ADR-003 D2-3）：启动即扫一轮（错过补偿在此生效）
 const runners = new Map()
-runners.set('digest', createDigestRunner({ kbRoot: KB_ROOT, dataRoot: DATA_ROOT }))
+runners.set(
+  'digest',
+  createDigestRunner({
+    kbRoot: KB_ROOT,
+    dataRoot: DATA_ROOT,
+    // LLM 路由懒解析：未配置时 runner 自行降级为原始快报（不 fail 任务）
+    routing: await llmRouting().catch(() => undefined),
+  }),
+)
 scheduler = startScheduler({ dataRoot: DATA_ROOT, kbRoot: KB_ROOT, runners, events: bus })
 // 过期 query 遗忘（GC）：启动即清理一次，之后每小时巡检
 const { gcExpiredQueries } = await import('./query-pipeline.ts')

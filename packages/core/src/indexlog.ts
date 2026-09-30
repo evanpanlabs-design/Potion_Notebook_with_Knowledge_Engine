@@ -4,7 +4,7 @@
  * log.md：append-only，`## [YYYY-MM-DD HH:mm] <op> | <标题>`，op ∈ {ingest, query, lint, review, note}。
  */
 
-export const LOG_OPS = ['ingest', 'query', 'lint', 'review', 'note', 'edit', 'sync', 'rework'] as const
+export const LOG_OPS = ['ingest', 'query', 'lint', 'review', 'note', 'edit', 'sync', 'rework', 'task', 'bulletin', 'digest', 'audit'] as const
 export type LogOp = (typeof LOG_OPS)[number]
 
 export interface IndexEntry {
