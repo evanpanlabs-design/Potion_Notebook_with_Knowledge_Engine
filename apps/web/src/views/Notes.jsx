@@ -48,6 +48,16 @@ const SYNC_BADGE = {
   never: { text: '未消化', cls: 'sync-badge never' },
 }
 
+/** 库页面目录 → 中文类型名（T1·IA 收束：未知目录原样展示，防御未来新目录） */
+const LIB_DIR_LABELS = {
+  'wiki/entities': '实体',
+  'wiki/concepts': '概念',
+  'wiki/sources': '素材页',
+  sources: '原始素材',
+}
+/** 分组固定展示顺序（未知目录排在末尾） */
+const LIB_DIR_ORDER = ['wiki/entities', 'wiki/concepts', 'wiki/sources', 'sources']
+
 export default function Notes({ onOpenPage, stream }) {
   const [tab, setTab] = useState('notes') // 'notes' | 'library'
   const [notes, setNotes] = useState([])
@@ -65,6 +75,9 @@ export default function Notes({ onOpenPage, stream }) {
   const [error, setError] = useState('')
   const [paneCollapsed, setPaneCollapsed] = useState(false)
   const [newProject, setNewProject] = useState('') // 新建笔记时的项目输入
+  // ---- T1·库页面分类折叠 + 类型过滤（IA-CONVERGENCE-v0.3 T1）----
+  const [libFilter, setLibFilter] = useState('all') // 'all' | 目录名
+  const [libCollapsed, setLibCollapsed] = useState({}) // Record<目录, true=展开>，未记录默认折叠（提案 T1 约定）
   // ---- 编辑模式（feat/milkdown-editor）：'wysiwyg'（Milkdown）| 'source'（CM6 源码 fallback） ----
   const [editMode, setEditMode] = useState(() => localStorage.getItem('ke.editMode') || 'wysiwyg')
   const [fmText, setFmText] = useState(null) // frontmatter yaml 原文（不进编辑器，保存拼回）
@@ -362,7 +375,7 @@ const wysPendingDirty = useRef(false) // 带改动切到 wysiwyg 时保持 dirty
   }
   projects.sort((a, b) => (a.name === '' ? -1 : b.name === '' ? 1 : a.name.localeCompare(b.name)))
 
-  // 左栏：库页面按目录分组
+  // 左栏：库页面按目录分组（T1：固定顺序排序；类型过滤下自动展开目标组）
   const libGroups = []
   for (const f of libraryFiles) {
     const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '(根目录)'
@@ -373,6 +386,13 @@ const wysPendingDirty = useRef(false) // 带改动切到 wysiwyg 时保持 dirty
     }
     g.files.push(f)
   }
+  libGroups.sort(
+    (a, b) =>
+      (LIB_DIR_ORDER.indexOf(a.dir) === -1 ? 99 : LIB_DIR_ORDER.indexOf(a.dir)) -
+      (LIB_DIR_ORDER.indexOf(b.dir) === -1 ? 99 : LIB_DIR_ORDER.indexOf(b.dir)) ||
+      a.dir.localeCompare(b.dir),
+  )
+  const visibleLibGroups = libFilter === 'all' ? libGroups : libGroups.filter((g) => g.dir === libFilter)
 
   const slow = syncing && stream.elapsed >= SLOW_HINT_SECONDS
   const badge = noteMeta ? SYNC_BADGE[noteMeta.syncState] : null
@@ -468,32 +488,69 @@ const wysPendingDirty = useRef(false) // 带改动切到 wysiwyg 时保持 dirty
             )}
 
             {tab === 'library' && (
-              <div className="doc-tree">
-                {libGroups.length === 0 && (
-                  <div className="mono" style={{ color: 'var(--c-text-3)', padding: 8 }}>库为空——先写笔记或到「素材」页导入并同步。</div>
-                )}
-                {libGroups.map((g) => (
-                  <div key={g.dir}>
-                    <div className="doc-group-label">{g.dir}</div>
-                    {g.files.map((f) => (
+              <>
+                {libGroups.length > 0 && (
+                  <div className="lib-filter-chips" role="tablist" aria-label="库页面类型过滤">
+                    <button
+                      className={`filter-chip ${libFilter === 'all' ? 'active' : ''}`}
+                      onClick={() => setLibFilter('all')}
+                    >
+                      全部 · {libraryFiles.length}
+                    </button>
+                    {libGroups.map((g) => (
                       <button
-                        key={f.path}
-                        className={`note-item ${current?.path === f.path ? 'active' : ''}`}
-                        onClick={() => openDoc({ path: f.path, title: f.path.split('/').pop().replace(/\.md$/, ''), kind: f.kind })}
+                        key={g.dir}
+                        className={`filter-chip ${libFilter === g.dir ? 'active' : ''}`}
+                        onClick={() => setLibFilter(libFilter === g.dir ? 'all' : g.dir)}
+                        title={g.dir}
                       >
-                        <span className="note-title">
-                          {f.path.split('/').pop().replace(/\.md$/, '')}
-                          {f.reviewed && <span className="reviewed-tag">✓</span>}
-                        </span>
-                        <span className="note-time">{f.kind}</span>
+                        {LIB_DIR_LABELS[g.dir] ?? g.dir} · {g.files.length}
                       </button>
                     ))}
                   </div>
-                ))}
-                <div className="notes-pane-foot">
-                  库页面（AI 生成 / 来源）同样可直接编辑；保存保留溯源 frontmatter，改完可「同步到知识库」让引擎局部维护关联页。
+                )}
+                <div className="doc-tree">
+                  {libGroups.length === 0 && (
+                    <div className="mono" style={{ color: 'var(--c-text-3)', padding: 8 }}>库为空——先写笔记或到「素材」页导入并同步。</div>
+                  )}
+                  {visibleLibGroups.map((g) => {
+                    // 默认折叠（提案 T1 约定）；选中某类型 chip 时强制展开该组（否则过滤后只剩一个折叠头）
+                    const expanded = libFilter !== 'all' || libCollapsed[g.dir] === true
+                    return (
+                      <div key={g.dir}>
+                        <button
+                          className="doc-group-label lib-group-toggle"
+                          onClick={() => setLibCollapsed((m) => ({ ...m, [g.dir]: !expanded }))}
+                          aria-expanded={expanded}
+                          title={g.dir}
+                        >
+                          <span className="fold-arrow">{expanded ? '▾' : '▸'}</span>
+                          <span className="lib-group-name">
+                            {LIB_DIR_LABELS[g.dir] ?? g.dir} · {g.files.length}
+                          </span>
+                        </button>
+                        {expanded &&
+                          g.files.map((f) => (
+                            <button
+                              key={f.path}
+                              className={`note-item ${current?.path === f.path ? 'active' : ''}`}
+                              onClick={() => openDoc({ path: f.path, title: f.path.split('/').pop().replace(/\.md$/, ''), kind: f.kind })}
+                            >
+                              <span className="note-title">
+                                {f.path.split('/').pop().replace(/\.md$/, '')}
+                                {f.reviewed && <span className="reviewed-tag">✓</span>}
+                              </span>
+                              <span className="note-time">{f.kind}</span>
+                            </button>
+                          ))}
+                      </div>
+                    )
+                  })}
+                  <div className="notes-pane-foot">
+                    库页面（AI 生成 / 来源）同样可直接编辑；保存保留溯源 frontmatter，改完可「同步到知识库」让引擎局部维护关联页。
+                  </div>
                 </div>
-              </div>
+              </>
             )}
           </div>
         )}

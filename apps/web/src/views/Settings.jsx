@@ -2,9 +2,19 @@ import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 
 /**
- * 设置页：LLM 双角色配置（ingest 消化 / query 问答）。
+ * 设置页（T2·IA 收束：选项卡化）：模型与解析 / 联网 / 关于。
+ *  - 模型与解析：LLM 双角色（ingest 消化 / query 问答）+ MinerU PDF 解析
+ *  - 联网：Tavily 检索
+ *  - 关于：版本 / 仓库 / 知识库统计 / 健康自检（只读）
+ * 各卡片组件原样保留、仅搬容器；tab 用 hidden 属性隐藏而非卸载，已填未存草稿切 tab 不丢失。
  * 协议支持 OpenAI 兼容 / Anthropic；连通性现场测试；保存后立即生效（无需重启）。
  */
+
+const SETTINGS_TABS = [
+  { id: 'models', label: '模型与解析' },
+  { id: 'web', label: '联网' },
+  { id: 'about', label: '关于' },
+]
 
 const ROLE_INFO = {
   ingest: {
@@ -169,6 +179,74 @@ function TavilyCard() {
   )
 }
 
+/** 关于 tab（只读）：版本 / 仓库链接 / 知识库统计（/api/kb/status）+ 健康自检（/api/health） */
+function AboutCard() {
+  const [stats, setStats] = useState(null)
+  const [health, setHealth] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.status().then(setStats).catch(() => {})
+  }, [])
+
+  async function selfCheck() {
+    setBusy(true)
+    setHealth(null)
+    const t0 = performance.now()
+    try {
+      const r = await api.health()
+      setHealth({ ok: r.ok, kb: r.kb, ms: Math.round(performance.now() - t0) })
+    } catch (e) {
+      setHealth({ ok: false, kb: e.message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="card settings-role">
+      <h2>关于</h2>
+      <p className="settings-desc">
+        Potion · Knowledge Engine——local-first 的知识管理应用：AI 生成的一切写入经人工审核闸门，知识库为纯 Markdown + 自托管 git 版本化。
+      </p>
+      <dl className="about-rows">
+        <div className="about-row">
+          <dt>版本</dt>
+          <dd>v0.3（IA 收束阶段）</dd>
+        </div>
+        <div className="about-row">
+          <dt>仓库</dt>
+          <dd>
+            <a href="https://github.com/evanpanlabs-design/Potion_Notebook_with_Knowledge_Engine" target="_blank" rel="noreferrer">
+              evanpanlabs-design/Potion_Notebook_with_Knowledge_Engine
+            </a>
+          </dd>
+        </div>
+        {stats && (
+          <div className="about-row">
+            <dt>知识库</dt>
+            <dd>
+              wiki 页面 {stats.pages} · 原始素材 {stats.sources} · 已审通过 {stats.reviewed}
+            </dd>
+          </div>
+        )}
+      </dl>
+      <div className="settings-saverow">
+        <button className="btn btn-secondary btn-sm" disabled={busy} onClick={selfCheck}>
+          {busy ? '检查中…' : '健康自检'}
+        </button>
+        {health && (
+          <span className={health.ok ? 'settings-hint' : 'settings-warn'}>
+            {health.ok
+              ? `✓ 服务正常 · 延迟 ${health.ms}ms · 知识库 ${health.kb}`
+              : `✕ 服务异常：${health.kb}`}
+          </span>
+        )}
+      </div>
+    </section>
+  )
+}
+
 function RoleForm({ role, form, onChange, onTest, testing, testResult }) {
   const set = (k, v) => onChange(role, { ...form, [k]: v })
   return (
@@ -232,6 +310,7 @@ function RoleForm({ role, form, onChange, onTest, testing, testResult }) {
 }
 
 export default function Settings() {
+  const [tab, setTab] = useState('models') // 'models' | 'web' | 'about'（T2 选项卡）
   const [forms, setForms] = useState({ ingest: { ...EMPTY_ROLE }, query: { ...EMPTY_ROLE } })
   const [source, setSource] = useState('none')
   const [loaded, setLoaded] = useState(false)
@@ -334,32 +413,56 @@ export default function Settings() {
       {error && <div className="banner banner-err">{error}</div>}
       {message && <div className="banner banner-ok">{message}</div>}
 
-      <RoleForm
-        role="ingest"
-        form={forms.ingest}
-        onChange={onChange}
-        onTest={test}
-        testing={testing.ingest}
-        testResult={testResult.ingest}
-      />
-      <RoleForm
-        role="query"
-        form={forms.query}
-        onChange={onChange}
-        onTest={test}
-        testing={testing.query}
-        testResult={testResult.query}
-      />
-
-      <div className="settings-saverow">
-        <button className="btn btn-primary" disabled={saving} onClick={save}>
-          {saving ? '保存中…' : '保存配置'}
-        </button>
-        <span className="settings-hint">两个角色都必填；API Key 留空表示沿用已保存的值。</span>
+      <div className="settings-tabs" role="tablist" aria-label="设置分区">
+        {SETTINGS_TABS.map((t) => (
+          <button
+            key={t.id}
+            className={`settings-tab ${tab === t.id ? 'active' : ''}`}
+            role="tab"
+            aria-selected={tab === t.id}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      <MineruCard />
-      <TavilyCard />
+      {/* hidden 属性隐藏而非条件渲染：各 tab 内已填未存的草稿切走再切回不丢失 */}
+      <div className="settings-tabpane" hidden={tab !== 'models'}>
+        <RoleForm
+          role="ingest"
+          form={forms.ingest}
+          onChange={onChange}
+          onTest={test}
+          testing={testing.ingest}
+          testResult={testResult.ingest}
+        />
+        <RoleForm
+          role="query"
+          form={forms.query}
+          onChange={onChange}
+          onTest={test}
+          testing={testing.query}
+          testResult={testResult.query}
+        />
+
+        <div className="settings-saverow">
+          <button className="btn btn-primary" disabled={saving} onClick={save}>
+            {saving ? '保存中…' : '保存配置'}
+          </button>
+          <span className="settings-hint">两个角色都必填；API Key 留空表示沿用已保存的值。</span>
+        </div>
+
+        <MineruCard />
+      </div>
+
+      <div className="settings-tabpane" hidden={tab !== 'web'}>
+        <TavilyCard />
+      </div>
+
+      <div className="settings-tabpane" hidden={tab !== 'about'}>
+        <AboutCard />
+      </div>
     </div>
   )
 }

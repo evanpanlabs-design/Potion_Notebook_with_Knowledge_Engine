@@ -12,6 +12,7 @@ const post = (url, body) => j(url, { method: 'POST', headers: JSON_HEADERS, body
 
 export const api = {
   status: () => j('/api/kb/status'),
+  health: () => j('/api/health'),
   addSource: (filename, content) => post('/api/sources', { filename, content }),
   ingest: (source) => post('/api/ingest', { source }),
   query: (question, archive = true) => post('/api/query', { question, archive }),
