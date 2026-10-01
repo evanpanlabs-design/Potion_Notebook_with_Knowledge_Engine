@@ -90,3 +90,18 @@ test('agent runner：LLM 失败 → 抛错（调度器记 error，不写半成�
   const runner = createAgentRunner({ kbRoot, dataRoot, routing: badRouting })
   await assert.rejects(runner(makeTask({ id: 't-agent-2', title: '会失败的任务' }), { manual: false }), /LLM down/)
 })
+
+test('agent runner：模型空响应 → 重试一次仍空 → 记失败不写产物', async () => {
+  const kbRoot = await mkdtemp(path.join(tmpdir(), 'ke-kb-'))
+  const dataRoot = await mkdtemp(path.join(tmpdir(), 'ke-data-'))
+  await mkdir(path.join(kbRoot, 'inbox'), { recursive: true })
+  // 空文本、无工具调用 → loop 立即结束且 answer 为空
+  const emptyRouting = {
+    streamRaw: async function* () {
+      yield { type: 'text_delta', delta: '' }
+      yield { type: 'done', message: { content: [{ type: 'text', text: '' }], usage: { input: 10, output: 0 } } }
+    },
+  }
+  const runner = createAgentRunner({ kbRoot, dataRoot, routing: emptyRouting })
+  await assert.rejects(runner(makeTask({ id: 't-agent-3', title: '空响应任务' }), { manual: false }), /连续两轮未产出正文/)
+})

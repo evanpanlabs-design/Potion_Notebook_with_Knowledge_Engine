@@ -81,7 +81,7 @@ export function createDigestRunner(deps: DigestRunnerDeps): TaskRunner {
     const r = await client.search(query, { maxResults: 5 })
     await bumpTavilyUsage(dataRoot, r.credits)
 
-    const date = new Date().toISOString().slice(0, 10)
+    const date = localDateStr()
     const slug = slugify(task.topic)
 
     // ---------- 证据页：sources/inbox-<date>-<slug>.md（wiki 引用的合法依据） ----------
@@ -198,6 +198,16 @@ function renderRaw(
     `---\n\n证据页：[[${evidenceRel.replace(/\.md$/, '')}]] · 搜索词：\`${query}\` · Tavily 本月用量 ${usedCount}/${TAVILY_MONTHLY_LIMIT}`,
     '',
   ].join('\n')
+}
+
+/** 本地日期串 YYYY-MM-DD（用户感知的“今天”）。
+ *  不用 toISOString()（UTC）：东八区晚 8 点后 UTC 日期已跨天，
+ *  会导致日报文件名/标题日期比用户感知早一天（e2e 跨日 flake 根因） */
+export function localDateStr(d = new Date()): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 function slugify(name: string): string {

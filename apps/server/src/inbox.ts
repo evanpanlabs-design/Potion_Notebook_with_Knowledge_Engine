@@ -19,6 +19,10 @@ export interface InboxItem {
   taskTitle: string
   generatedAt: string
   mode: string
+  /** 产出者：digest = 日报管线；agent = 子 Agent（无 sources，展示轮步） */
+  runner: 'digest' | 'agent'
+  turns: number | null
+  steps: number | null
   sources: string[]
   evidence: string | null
   digested: boolean
@@ -46,6 +50,9 @@ export async function listInbox(kbRoot: string): Promise<InboxItem[]> {
       taskTitle: (fm['taskTitle'] as string) ?? '',
       generatedAt: (fm['generatedAt'] as string) ?? '',
       mode: (fm['mode'] as string) ?? 'scheduled',
+      runner: fm['runner'] === 'agent' ? 'agent' : 'digest',
+      turns: typeof fm['turns'] === 'number' ? (fm['turns'] as number) : null,
+      steps: typeof fm['steps'] === 'number' ? (fm['steps'] as number) : null,
       sources: Array.isArray(fm['sources']) ? (fm['sources'] as string[]) : [],
       evidence: (fm['evidence'] as string) ?? null,
       digested: fm['digested'] === true,
@@ -56,11 +63,12 @@ export async function listInbox(kbRoot: string): Promise<InboxItem[]> {
   return items
 }
 
-/** 读单封（收件箱正文预览用；内容太大时前端分页/折叠） */
+/** 读单封（收件箱正文预览用；剥离 frontmatter，只回正文） */
 export async function readInboxItem(kbRoot: string, rel: string): Promise<{ content: string } | null> {
   if (!rel.startsWith('inbox/') || !rel.endsWith('.md') || rel.includes('..')) return null
   try {
-    return { content: await readFile(path.join(kbRoot, rel), 'utf8') }
+    const { body } = parsePage(await readFile(path.join(kbRoot, rel), 'utf8'))
+    return { content: body }
   } catch {
     return null
   }

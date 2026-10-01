@@ -96,7 +96,10 @@ export default function Inbox({ onOpenPage, go }) {
                   <span className="inbox-title">{it.taskTitle || it.title}</span>
                   <span className="inbox-topic">{it.topic}</span>
                   <span className="mono inbox-meta">
-                    {it.mode === 'manual' ? '手动' : '定时'} · {(it.generatedAt || '').slice(0, 16).replace('T', ' ')} · {it.sources.length} 来源
+                    {it.mode === 'manual' ? '手动' : '定时'} · {(it.generatedAt || '').slice(0, 16).replace('T', ' ')}
+                    {it.runner === 'agent'
+                      ? ` · agent ${it.turns ?? '?'}轮${it.steps ?? '?'}步`
+                      : ` · ${it.sources.length} 来源`}
                   </span>
                   <span className="inbox-chevron">{open ? '▾' : '▸'}</span>
                 </button>

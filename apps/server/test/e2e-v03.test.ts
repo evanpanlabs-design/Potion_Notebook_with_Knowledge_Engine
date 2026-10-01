@@ -53,7 +53,7 @@ function spyRouting(report) {
     concepts: [],
   }
   const generation = {
-    pages: [{ name: 'OpenAI', body: 'OpenAI 发布新模型，性能提升 30%。', sources: ['sources/inbox-2026-09-30-ai.md'] }],
+    pages: [{ name: 'OpenAI', body: 'OpenAI 发布新模型，性能提升 30%。', sources: [`sources/inbox-${localToday()}-ai.md`] }],
   }
   let ingestCall = 0
   return {
@@ -67,6 +67,12 @@ function spyRouting(report) {
       yield { type: 'done', message: { usage: { input: 10, output: 10 } } }
     },
   }
+}
+
+/** 本地“今天”YYYY-MM-DD（fixture 与 digest-runner 证据页命名对齐；勿硬编码——UTC 跨日 flake 教训） */
+function localToday(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 const REPORT = {
@@ -213,7 +219,7 @@ test('e2e 日报消化闭环：收件箱 digest → 证据页 ingest → 幂等 
 
     // 消化：证据页走 ingest 管线（fake routing 的 callLlmJson 也会 stream——ingest 需要）
     const result = await digestInboxItem({ kbRoot, routing }, item.path)
-    assert.ok(result.ok, `消化成功：${result.note ?? ''}`)
+    assert.ok(result.ok, `消化成功：${result.digestOutcome ?? ''} ${JSON.stringify(result.rejections)}`)
 
     // digested 标记写回 frontmatter
     const raw = await readFile(path.join(kbRoot, item.path), 'utf8')

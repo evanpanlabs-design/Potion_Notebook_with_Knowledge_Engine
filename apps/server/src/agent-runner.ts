@@ -23,6 +23,7 @@ import { buildKbTools, loadSkillHints, renderSkillHints } from './agent-tools.ts
 import { beginTask, finishTask } from './workbench.ts'
 import { activeDirectives, renderDirectives } from './bulletin.ts'
 import { gitCommitAll } from './ingest-pipeline.ts'
+import { localDateStr } from './digest-runner.ts'
 import type { ScheduledTask } from '@ke/core'
 import type { TaskRunner } from './scheduler.ts'
 
@@ -88,16 +89,24 @@ export function createAgentRunner(deps: AgentRunnerDeps): TaskRunner {
     const startedAt = new Date().toISOString()
     const taskId = await beginTask(dataRoot, { question: `[定时] ${task.title}`, toolCount: tools.length })
 
-    let result: AgentLoopResult
+    // LLM 偶发劣化（空响应/碎片工具调用）兜底：最多重试一次；仍无正文则记任务失败
+    // （总览行内会显示原因），不写空壳产物。
+    let result: AgentLoopResult | null = null
     try {
-      result = await runAgentLoop({
-        systemPrompt: AGENT_TASK_PROMPT + skillSuffix,
-        userPrompt,
-        tools,
-        routing,
-        maxTurns: deps.maxTurns ?? 12,
-        onEvent: (ev) => events.emit(ev.type, ev),
-      })
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const r = await runAgentLoop({
+          systemPrompt: AGENT_TASK_PROMPT + skillSuffix,
+          userPrompt,
+          tools,
+          routing,
+          maxTurns: deps.maxTurns ?? 12,
+          onEvent: (ev) => events.emit(ev.type, ev),
+        })
+        if (r.answer.trim() || r.truncated) {
+          result = r
+          break
+        }
+      }
     } catch (e) {
       await finishTask(dataRoot, taskId, {
         status: 'error',
@@ -114,9 +123,25 @@ export function createAgentRunner(deps: AgentRunnerDeps): TaskRunner {
       }).catch(() => {})
       throw e
     }
+    if (!result || !result.answer.trim()) {
+      await finishTask(dataRoot, taskId, {
+        status: 'error',
+        question: `[定时] ${task.title}`,
+        toolCount: tools.length,
+        startedAt,
+        trace: [],
+        answer: '',
+        turns: 0,
+        steps: 0,
+        truncated: false,
+        tokens: null,
+        error: 'Agent 连续两轮未产出正文（模型空响应）',
+      }).catch(() => {})
+      throw new Error('Agent 连续两轮未产出正文（模型空响应）——请到工作台查轨迹后重试')
+    }
 
     // ---------- 产物：inbox/agent-<date>-<slug>.md（收件箱视图消费；幂等覆盖） ----------
-    const date = new Date().toISOString().slice(0, 10)
+    const date = localDateStr()
     const rel = `inbox/agent-${date}-${slugify(task.title)}.md`
     const fm = {
       type: 'bulletin' as const,
