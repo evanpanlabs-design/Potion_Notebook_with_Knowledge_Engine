@@ -41,7 +41,10 @@ test('rebuildIndexSection 当前缺段时追加', () => {
 })
 
 test('renderLogEntry 格式与 Karpathy 可解析约定一致', () => {
-  const d = new Date('2026-09-28T14:05:00+08:00')
+  // 日志时间戳渲染的是**机器本地时区**的人读时间轴（Karpathy 惯例），
+  // 所以这里必须用本地时间构造 Date：写成固定偏移的 ISO 串会让断言只在
+  // 特定时区（如 UTC+8）成立，CI 跑在 UTC 的 runner 上会失败。
+  const d = new Date(2026, 8, 28, 14, 5)
   const line = renderLogEntry('ingest', 'LLM Wiki 设想', d)
   assert.equal(line, '## [2026-09-28 14:05] ingest | LLM Wiki 设想\n')
   // grep 约定自检：每条以 "## [" 开头
