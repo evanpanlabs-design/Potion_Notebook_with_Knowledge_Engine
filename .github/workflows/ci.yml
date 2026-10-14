@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的旧运行自动取消，省额度也省等待
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 单测与类型检查 (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24] # package.json engines 要求 >=22，22 是下限、24 是当前 LTS
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      # npm ci 严格按 package-lock.json 安装；lockfile 与 package.json 不一致会直接失败
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+      - name: 单元测试
+        run: npm test
+      - name: 类型检查
+        run: npm run typecheck
+
+  lockfile-registry:
+    name: lockfile 源地址守卫
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 生成 lockfile 的那台机器用的源会被写进 resolved 字段，外部环境无法访问。
+      # 这里挡住"公司内网源"回归公共仓库。
+      - name: 确认 lockfile 只指向公共 npm 源
+        run: |
+          if grep -rq "r\.npm\.sankuai\.com" --include=package-lock.json .; then
+            echo "::error::package-lock.json 里有内网源地址，外部环境 npm install 会失败。用公共 registry.npmjs.org 重新生成后再提交。"
+            grep -rn "r\.npm\.sankuai\.com" --include=package-lock.json . | head -5
+            exit 1
+          fi
+          echo "OK：lockfile 未指向内网源"
+
+  build:
+    name: 前端构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: vite build
+        run: npm run build -w apps/web
+
+  smoke:
+    name: 冒烟（起服务 + 健康检查 + 代理连通）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # 产品的核心承诺是"npm install && npm start 起来就能用"，
+      # 所以这里真的把它起起来，探测后端 /api/v1/health 和前端经 vite 代理的连通性。
+      - name: 启动 server 与 web，探测接口
+        run: |
+          set -u
+          npm run dev -w apps/server > /tmp/server.log 2>&1 &
+          npm run dev -w apps/web    > /tmp/web.log    2>&1 &
+
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:3100/api/v1/health -o /tmp/health.json; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::后端 40 秒内没有就绪"
+            cat /tmp/server.log
+            exit 1
+          fi
+          echo "后端健康检查：$(cat /tmp/health.json)"
+          grep -q '"ok":true' /tmp/health.json || { cat /tmp/server.log; exit 1; }
+
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -fsS http://localhost:5175/ -o /tmp/index.html; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::前端 40 秒内没有就绪"
+            cat /tmp/web.log
+            exit 1
+          fi
+          grep -q "<title>" /tmp/index.html || { echo "::error::前端首页异常"; exit 1; }
+          echo "前端首页 OK"
+
+          # 经 vite 代理（/api → /api/v1）打后端，验证前后端接线
+          curl -fsS http://localhost:5175/api/health | grep -q '"ok":true' \
+            || { echo "::error::vite 代理 /api 不通"; cat /tmp/web.log; exit 1; }
+          echo "代理连通 OK"
+      - name: 失败时上传日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs
+          path: |
+            /tmp/server.log
+            /tmp/web.log
+          if-no-files-found: ignore
