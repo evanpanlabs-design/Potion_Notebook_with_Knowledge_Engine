@@ -20,8 +20,8 @@ jobs:
       matrix:
         node: [22, 24] # package.json engines 要求 >=22，22 是下限、24 是当前 LTS
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -37,7 +37,7 @@ jobs:
     name: lockfile 源地址守卫
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # 生成 lockfile 的那台机器用的源会被写进 resolved 字段，外部环境无法访问。
       # 这里挡住"公司内网源"回归公共仓库。
       - name: 确认 lockfile 只指向公共 npm 源
@@ -53,8 +53,8 @@ jobs:
     name: 前端构建
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -66,8 +66,8 @@ jobs:
     name: 冒烟（起服务 + 健康检查 + 代理连通）
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -112,7 +112,7 @@ jobs:
           echo "代理连通 OK"
       - name: 失败时上传日志
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-logs
           path: |
