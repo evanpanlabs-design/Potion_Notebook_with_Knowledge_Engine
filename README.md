@@ -1,5 +1,7 @@
 # Potion · Knowledge Engine
 
+[![CI](https://github.com/evanpanlabs-design/Potion_Notebook_with_Knowledge_Engine/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/evanpanlabs-design/Potion_Notebook_with_Knowledge_Engine/actions/workflows/ci.yml)
+
 > 替你消化知识的笔记本 —— 你写笔记，它替你把素材消化成结构化 Wiki，两者互为一等公民。
 
 Potion 是一个**本地优先**的知识管理应用：把文章、笔记、想法投喂给引擎，两段式 LLM 管道会将素材消化成互相链接的 Wiki 页面（实体 / 概念 / 来源摘要）；你随时用自己的笔记（Note）与这套 Wiki 双向链接。所有产物都是纯 Markdown 文件 + git 版本管理 —— **知识库永远属于你，随时可以用 Obsidian 打开**。
